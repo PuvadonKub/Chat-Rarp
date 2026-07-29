@@ -47,98 +47,112 @@
 
   <!-- ==================== MAIN APP ==================== -->
   <div id="app-screen" class="screen">
-    <div class="messenger-layout">
+    <div class="app-layout">
       <!-- Mobile Menu Toggle -->
       <button id="mobile-menu-toggle" class="mobile-menu-toggle">
         <i class="fas fa-bars"></i>
       </button>
       <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-      <!-- 🟢 LEFT: Unified Sidebar -->
-      <aside id="sidebar" class="ms-sidebar">
-        <div class="ms-header">
-          <div class="ms-header-left">
+      <!-- Sidebar -->
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <div class="brand">
+            <i class="fas fa-comments"></i>
+            <span>ChatVerse</span>
+          </div>
+          <div class="user-badge">
             <div class="avatar-sm" id="my-avatar"></div>
-            <h2>Chats</h2>
-          </div>
-          <div class="ms-header-actions">
-            <button id="create-room-btn" class="ms-icon-btn" title="New Group"><i class="fas fa-edit"></i></button>
-            <button id="logout-btn" class="ms-icon-btn" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
+            <span id="my-username"></span>
           </div>
         </div>
 
-        <div class="ms-search">
-          <div class="ms-search-bar">
-            <i class="fas fa-search"></i>
-            <input type="text" id="search-input" placeholder="Search Messenger" autocomplete="off">
+        <!-- Room List -->
+        <div class="sidebar-section">
+          <div class="section-header">
+            <h3><i class="fas fa-door-open"></i> Rooms</h3>
+            <button id="create-room-btn" class="btn-icon" title="Create Room">
+              <i class="fas fa-plus"></i>
+            </button>
           </div>
+          <div id="room-list" class="room-list"></div>
         </div>
 
-        <div id="unified-chat-list" class="ms-chat-list">
-          <!-- Dynamically populated by JS (Rooms + DMs) -->
+        <!-- Online Users -->
+        <div class="sidebar-section">
+          <div class="section-header">
+            <h3><i class="fas fa-users"></i> Online Users</h3>
+            <span id="online-count" class="badge">0</span>
+          </div>
+          <div id="online-users" class="user-list"></div>
+        </div>
+
+        <!-- Logout -->
+        <div class="sidebar-footer">
+          <button id="logout-btn" class="btn-logout">
+            <i class="fas fa-sign-out-alt"></i>
+            <span>Disconnect</span>
+          </button>
         </div>
       </aside>
 
-      <!-- 🔵 RIGHT: Main Chat Area -->
-      <main class="ms-main">
-
-        <!-- Welcome Screen -->
+      <!-- Main Content Area -->
+      <main class="main-content">
+        <!-- Welcome Screen (no room selected) -->
         <div id="welcome-panel" class="panel active">
           <div class="welcome-content">
-            <div class="welcome-icon ms-brand">
-              <i class="fab fa-facebook-messenger"></i>
+            <div class="welcome-icon">
+              <i class="fas fa-paper-plane"></i>
             </div>
-            <h2>Welcome to ChatVerse</h2>
-            <p>Select a conversation or start a new one.</p>
+            <h2>Welcome to ChatVerse!</h2>
+            <p>Select a room from the sidebar or create a new one to start chatting</p>
+            <div class="welcome-tips">
+              <div class="tip"><i class="fas fa-door-open"></i> Join a room for group chat</div>
+              <div class="tip"><i class="fas fa-user"></i> Click a user for private messaging</div>
+              <div class="tip"><i class="fas fa-video"></i> Start video calls in chat rooms</div>
+              <div class="tip"><i class="fas fa-music"></i> Enter Music Room to listen together</div>
+            </div>
           </div>
         </div>
 
-        <!-- Messenger Chat Panel -->
+        <!-- Chat Room Panel -->
         <div id="chat-panel" class="panel">
-          <div class="ms-chat-header">
-            <div class="ms-chat-header-info">
-              <button id="back-btn" class="ms-icon-btn mobile-only"><i class="fas fa-arrow-left"></i></button>
-              <div class="avatar-sm" id="active-chat-avatar"></div>
-              <div class="ms-title-box">
-                <h2 id="room-name"></h2>
-                <span id="room-members-count" class="ms-subtitle"></span>
-              </div>
+          <div class="chat-header">
+            <div class="chat-header-info">
+              <button id="back-btn" class="btn-icon mobile-only"><i class="fas fa-arrow-left"></i></button>
+              <h2 id="room-name"></h2>
+              <span id="room-members-count" class="badge"></span>
             </div>
-
-            <div class="ms-chat-header-actions">
-              <button id="video-call-btn" class="ms-icon-btn text-primary" title="Start Call"><i
-                  class="fas fa-phone-alt"></i></button>
-              <button id="room-members-btn" class="ms-icon-btn text-primary" title="Group Info"><i
-                  class="fas fa-info-circle"></i></button>
-              <button id="leave-room-btn" class="ms-icon-btn text-danger" title="Leave/Close"><i
-                  class="fas fa-sign-out-alt"></i></button>
+            <div class="chat-header-actions">
+              <button id="video-call-btn" class="btn-icon" title="Start Video Call">
+                <i class="fas fa-video"></i>
+              </button>
+              <button id="room-members-btn" class="btn-icon" title="View Members">
+                <i class="fas fa-users"></i>
+              </button>
+              <button id="leave-room-btn" class="btn-icon btn-danger" title="Leave Room">
+                <i class="fas fa-sign-out-alt"></i>
+              </button>
             </div>
           </div>
 
-          <!-- Group Members Sidebar -->
+          <!-- Members Sidebar -->
           <div id="members-sidebar" class="members-sidebar">
             <div class="members-header">
-              <h3>Group Info</h3>
+              <h3>Room Members</h3>
               <button id="close-members-btn" class="btn-icon"><i class="fas fa-times"></i></button>
             </div>
             <div id="members-list" class="members-list"></div>
           </div>
 
-          <div id="chat-messages" class="ms-chat-messages"></div>
+          <div id="chat-messages" class="chat-messages"></div>
 
-          <div class="ms-chat-input-area">
+          <div class="chat-input-area">
             <div class="typing-indicator" id="typing-indicator"></div>
-            <div class="ms-input-container">
-              <button class="ms-input-action"><i class="fas fa-plus-circle"></i></button>
-              <button class="ms-input-action"><i class="fas fa-image"></i></button>
-
-              <div class="ms-input-wrapper">
-                <input type="text" id="chat-input" placeholder="Aa" autocomplete="off">
-                <button class="ms-input-emoji"><i class="fas fa-smile"></i></button>
-              </div>
-
-              <button id="send-btn" class="ms-send-btn">
-                <i class="fas fa-thumbs-up" id="send-icon"></i>
+            <div class="chat-input-wrapper">
+              <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
+              <button id="send-btn" class="btn-send">
+                <i class="fas fa-paper-plane"></i>
               </button>
             </div>
           </div>
@@ -146,25 +160,26 @@
 
         <!-- Music Room Panel -->
         <div id="music-panel" class="panel">
-          <div class="ms-chat-header">
-            <div class="ms-chat-header-info">
-              <button class="ms-icon-btn mobile-only back-to-lobby-btn"><i class="fas fa-arrow-left"></i></button>
-              <div class="avatar-sm avatar-color-5"><i class="fas fa-music"></i></div>
-              <div class="ms-title-box">
-                <h2>Music Room</h2>
-                <span id="music-room-members" class="ms-subtitle"></span>
-              </div>
+          <div class="chat-header">
+            <div class="chat-header-info">
+              <button class="btn-icon mobile-only back-to-lobby-btn"><i class="fas fa-arrow-left"></i></button>
+              <h2><i class="fas fa-music"></i> Music Room</h2>
+              <span id="music-room-members" class="badge"></span>
             </div>
-            <div class="ms-chat-header-actions">
-              <button id="leave-music-btn" class="ms-icon-btn text-danger" title="Leave Music Room"><i
-                  class="fas fa-sign-out-alt"></i></button>
+            <div class="chat-header-actions">
+              <button id="leave-music-btn" class="btn-icon btn-danger" title="Leave Room">
+                <i class="fas fa-sign-out-alt"></i>
+              </button>
             </div>
           </div>
 
           <div class="music-layout">
+            <!-- Now Playing -->
             <div class="now-playing glass-card">
               <div class="album-art" id="album-art">
-                <div class="album-art-placeholder"><i class="fas fa-music"></i></div>
+                <div class="album-art-placeholder">
+                  <i class="fas fa-music"></i>
+                </div>
                 <div class="vinyl-spin" id="vinyl-spin"></div>
               </div>
               <div class="track-info">
@@ -189,25 +204,52 @@
               </div>
             </div>
 
+            <!-- Playlist -->
             <div class="playlist glass-card">
               <h3><i class="fas fa-list"></i> Playlist</h3>
               <div id="playlist-items" class="playlist-items"></div>
             </div>
 
+            <!-- Music Room Chat -->
             <div class="music-chat glass-card">
               <h3><i class="fas fa-comments"></i> Room Chat</h3>
-              <div id="music-chat-messages" class="ms-chat-messages" style="flex:1;"></div>
-
-              <div class="ms-input-container" style="padding: 10px; background: transparent;">
-                <div class="ms-input-wrapper" style="width: 100%;">
-                  <input type="text" id="music-chat-input" placeholder="Aa" autocomplete="off">
-                </div>
-                <button id="music-send-btn" class="ms-send-btn"><i class="fas fa-paper-plane"></i></button>
+              <div id="music-chat-messages" class="chat-messages"></div>
+              <div class="chat-input-wrapper">
+                <input type="text" id="music-chat-input" placeholder="Type a message..." autocomplete="off">
+                <button id="music-send-btn" class="btn-send">
+                  <i class="fas fa-paper-plane"></i>
+                </button>
               </div>
             </div>
           </div>
         </div>
       </main>
+
+      <!-- Private Chat Panel (DM) -->
+      <div id="dm-panel" class="dm-panel">
+        <div class="dm-header">
+          <div class="dm-header-info">
+            <div class="avatar-sm" id="dm-avatar"></div>
+            <div>
+              <h3 id="dm-username"></h3>
+              <span class="dm-status">Online</span>
+            </div>
+          </div>
+          <div class="dm-header-actions">
+            <button id="dm-video-call-btn" class="btn-icon" title="Video Call">
+              <i class="fas fa-video"></i>
+            </button>
+            <button id="close-dm-btn" class="btn-icon"><i class="fas fa-times"></i></button>
+          </div>
+        </div>
+        <div id="dm-messages" class="chat-messages"></div>
+        <div class="chat-input-wrapper">
+          <input type="text" id="dm-input" placeholder="Type a private message..." autocomplete="off">
+          <button id="dm-send-btn" class="btn-send">
+            <i class="fas fa-paper-plane"></i>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 

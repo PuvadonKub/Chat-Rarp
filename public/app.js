@@ -22,34 +22,38 @@ const loginBtn = $('login-btn');
 const loginError = $('login-error');
 const myUsername = $('my-username');
 const myAvatar = $('my-avatar');
-const msSidebar = $('sidebar');
-const unifiedChatList = $('unified-chat-list');
-const searchInput = $('search-input');
+const roomList = $('room-list');
+const onlineUsers = $('online-users');
+const onlineCount = $('online-count');
 const createRoomBtn = $('create-room-btn');
 const createRoomModal = $('create-room-modal');
 const roomNameInput = $('room-name-input');
 const confirmCreateRoom = $('confirm-create-room');
 const cancelCreateRoom = $('cancel-create-room');
-
+const roomNameEl = $('room-name');
+const roomMembersCount = $('room-members-count');
 const welcomePanel = $('welcome-panel');
 const chatPanel = $('chat-panel');
 const musicPanel = $('music-panel');
-const roomNameEl = $('room-name');
-const roomMembersCount = $('room-members-count');
-const activeChatAvatar = $('active-chat-avatar');
-
+const backBtn = $('back-btn');
 const chatMessages = $('chat-messages');
 const chatInput = $('chat-input');
 const sendBtn = $('send-btn');
-const backBtn = $('back-btn');
-const videoCallBtn = $('video-call-btn');
 const leaveRoomBtn = $('leave-room-btn');
-const roomMembersBtn = $('room-members-btn');
 
+const videoCallBtn = $('video-call-btn');
 const membersSidebar = $('members-sidebar');
+const roomMembersBtn = $('room-members-btn');
 const closeMembersBtn = $('close-members-btn');
 const membersList = $('members-list');
-
+const dmPanel = $('dm-panel');
+const dmAvatar = $('dm-avatar');
+const dmUsername = $('dm-username');
+const dmMessages = $('dm-messages');
+const dmInput = $('dm-input');
+const dmSendBtn = $('dm-send-btn');
+const closeDmBtn = $('close-dm-btn');
+const dmVideoCallBtn = $('dm-video-call-btn');
 const videoOverlay = $('video-overlay');
 const localVideo = $('local-video');
 const remoteVideo = $('remote-video');
@@ -62,7 +66,6 @@ const callerName = $('caller-name');
 const acceptCallBtn = $('accept-call-btn');
 const rejectCallBtn = $('reject-call-btn');
 const logoutBtn = $('logout-btn');
-
 const leaveMusicBtn = $('leave-music-btn');
 const musicRoomMembers = $('music-room-members');
 const trackTitle = $('track-title');
@@ -81,18 +84,17 @@ const playlistItems = $('playlist-items');
 const musicChatMessages = $('music-chat-messages');
 const musicChatInput = $('music-chat-input');
 const musicSendBtn = $('music-send-btn');
+
 musicPlayer = $('music-player');
 
 // ==================== HELPERS ====================
 function getAvatarColor(name) {
-    if (!name) return 'avatar-color-0';
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return `avatar-color-${Math.abs(hash) % 8}`;
 }
 
 function getInitials(name) {
-    if (!name) return '?';
     return name.charAt(0).toUpperCase();
 }
 
@@ -153,16 +155,13 @@ function doLogin() {
     socket.emit('register', username, (res) => {
         if (res.success) {
             currentUser = res.user;
+            myUsername.textContent = currentUser.username;
             myAvatar.textContent = getInitials(currentUser.username);
             myAvatar.className = `avatar-sm ${getAvatarColor(currentUser.username)}`;
 
             loginScreen.classList.remove('active');
             appScreen.classList.add('active');
             showToast(`Welcome, ${currentUser.username}!`, 'success');
-
-            // Explicitly render immediately & after a short delay in case of event race conditions
-            renderUnifiedList();
-            setTimeout(renderUnifiedList, 200);
         } else {
             loginError.textContent = res.error;
             loginBtn.disabled = false;
@@ -171,81 +170,48 @@ function doLogin() {
     });
 }
 
-
-// ==================== UNIFIED SIDEBAR ====================
-let allRooms = [];
-let onlineUsersList = [];
-
+// ==================== ROOM LIST ====================
 socket.on('room-list', (rooms) => {
-    allRooms = rooms;
-    renderUnifiedList();
-});
-
-socket.on('online-users', (users) => {
-    onlineUsersList = users.filter(u => !currentUser || u.username !== currentUser.username);
-    renderUnifiedList();
-});
-
-function renderUnifiedList() {
-    if (!unifiedChatList) return;
-    const query = searchInput.value.toLowerCase();
-    unifiedChatList.innerHTML = '';
-
-    let items = [];
-
-    // Rooms
-    allRooms.forEach(r => {
-        if (!r.name.toLowerCase().includes(query)) return;
-        items.push({
-            type: 'room', id: r.id, name: r.name,
-            icon: r.type === 'music' ? 'fa-music' : 'fa-users',
-            sub: r.type === 'music' ? 'Music Room' : (r.messages && r.messages.length ? r.messages[r.messages.length - 1].text : 'Group Chat'),
-            obj: r
-        });
-    });
-
-    // Users
-    onlineUsersList.forEach(u => {
-        if (!u.username.toLowerCase().includes(query)) return;
-        items.push({
-            type: 'dm', id: u.username, name: u.username,
-            icon: null, sub: u.lastMessage || 'Active now',
-            obj: u
-        });
-    });
-
-    // Render items
-    items.forEach(item => {
-        const isActive = currentChat && currentChat.id === item.id;
+    roomList.innerHTML = '';
+    rooms.forEach(room => {
+        const isMusic = room.type === 'music';
+        const isActive = currentRoom && currentRoom.id === room.id;
         const div = document.createElement('div');
-        div.className = `ms-chat-item ${isActive ? 'active' : ''}`;
-
-        let avatarHtml = '';
-        if (item.type === 'room') {
-            avatarHtml = `<div class="ms-chat-avatar avatar-color-5" style="display:flex;align-items:center;justify-content:center;color:white;"><i class="fas ${item.icon}"></i></div>`;
-        } else {
-            avatarHtml = `<div class="ms-chat-avatar ${getAvatarColor(item.name)}">${getInitials(item.name)}<span class="status-dot"></span></div>`;
-        }
-
+        div.className = `room-item ${isActive ? 'active' : ''}`;
         div.innerHTML = `
-            ${avatarHtml}
-            <div class="ms-chat-info">
-                <div class="ms-chat-name">${escapeHtml(item.name)}</div>
-                <div class="ms-chat-sub">${escapeHtml(item.sub)}</div>
-            </div>
-        `;
-
-        div.addEventListener('click', () => {
-            if (window.innerWidth <= 768) msSidebar.classList.add('hidden');
-            if (item.type === 'room') joinRoom(item.id);
-            else openDM(item.id);
-        });
-
-        unifiedChatList.appendChild(div);
+      <div class="room-icon ${room.type}">
+        <i class="fas fa-${isMusic ? 'music' : 'hashtag'}"></i>
+      </div>
+      <div class="room-info">
+        <div class="room-title">${escapeHtml(room.name)}</div>
+        <div class="room-meta">${room.memberCount} member${room.memberCount !== 1 ? 's' : ''}</div>
+      </div>
+    `;
+        div.addEventListener('click', () => joinRoom(room.id));
+        roomList.appendChild(div);
     });
-}
+});
 
-searchInput.addEventListener('input', renderUnifiedList);
+// ==================== ONLINE USERS ====================
+socket.on('online-users', (users) => {
+    onlineCount.textContent = users.length;
+    onlineUsers.innerHTML = '';
+    users.forEach(user => {
+        const isMe = currentUser && user.username === currentUser.username;
+        const div = document.createElement('div');
+        div.className = `user-item ${isMe ? 'is-me' : ''}`;
+        div.innerHTML = `
+      <div class="avatar-sm ${getAvatarColor(user.username)}">${getInitials(user.username)}</div>
+      <span class="status-dot"></span>
+      <span class="user-name">${escapeHtml(user.username)}${isMe ? ' (you)' : ''}</span>
+      ${!isMe ? '<span class="dm-badge"><i class="fas fa-envelope"></i></span>' : ''}
+    `;
+        if (!isMe) {
+            div.addEventListener('click', () => openDM(user.username));
+        }
+        onlineUsers.appendChild(div);
+    });
+});
 
 // ==================== CREATE ROOM ====================
 createRoomBtn.addEventListener('click', () => {
@@ -338,16 +304,12 @@ function closeChat() {
         playBtn.innerHTML = '<i class="fas fa-play"></i>';
     }
     renderUnifiedList();
-    if (window.innerWidth <= 768) msSidebar.classList.remove('hidden');
 }
 
 // ==================== CHAT MESSAGES ====================
 
-let lastMessageSender = null;
-
 function renderChatMessages(messages) {
     chatMessages.innerHTML = '';
-    lastMessageSender = null;
     messages.forEach(msg => appendMessageUI(msg));
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -358,24 +320,15 @@ function appendMessageUI(msg) {
         div.className = 'system-message';
         div.innerHTML = `<i class="fas fa-info-circle"></i> ${escapeHtml(msg.text)}`;
         chatMessages.appendChild(div);
-        lastMessageSender = null;
         return;
     }
 
     const isSent = msg.from === currentUser?.username;
-    const isGrouped = lastMessageSender === msg.from;
-    lastMessageSender = msg.from;
-
     const row = document.createElement('div');
-    row.className = `ms-msg-row ${isSent ? 'sent' : 'received'} ${isGrouped ? 'grouped' : ''}`;
-
-    // Hide avatar if grouped
-    const avatarHtml = (!isSent && !isGrouped)
-        ? `<div class="avatar-sm ${getAvatarColor(msg.from)}" style="width:28px;height:28px;font-size:12px;margin-right:8px;align-self:flex-end;flex-shrink:0;">${getInitials(msg.from)}</div>`
-        : (!isSent && isGrouped ? `<div style="width:28px;margin-right:8px;flex-shrink:0;"></div>` : '');
+    row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
 
     row.innerHTML = `
-        ${avatarHtml}
+        ${!isSent ? `<div class="avatar-sm ${getAvatarColor(msg.from)}" style="width:28px;height:28px;font-size:12px;margin-right:8px;align-self:flex-end;">${getInitials(msg.from)}</div>` : ''}
         <div class="ms-msg-bubble" title="${formatTime(msg.timestamp)}">${escapeHtml(msg.text)}</div>
     `;
     chatMessages.appendChild(row);
@@ -384,15 +337,10 @@ function appendMessageUI(msg) {
 
 sendBtn.addEventListener('click', sendMessage);
 chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
-chatInput.addEventListener('input', () => {
-    const val = chatInput.value.trim();
-    if (val.length > 0) sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i>';
-    else sendBtn.innerHTML = '<i class="fas fa-thumbs-up"></i>';
-});
 
 function sendMessage() {
-    const text = chatInput.value.trim() || '👍';
-    if (!currentChat) return;
+    const text = chatInput.value.trim();
+    if (!text || !currentChat) return;
 
     const msg = {
         id: Date.now().toString(),
@@ -403,42 +351,22 @@ function sendMessage() {
     };
 
     appendMessageUI(msg);
-    // Update local snippet immediately for sender
     if (currentChat.type === 'room') {
-        const r = allRooms.find(r => r.id === currentChat.id);
-        if (r) { if (!r.messages) r.messages = []; r.messages.push(msg); renderUnifiedList(); }
         socket.emit('room-message', { text });
     } else {
-        const u = onlineUsersList.find(u => u.username === currentChat.id);
-        if (u) { u.lastMessage = text; renderUnifiedList(); }
         socket.emit('private-message', { to: currentChat.id, text });
     }
-
     chatInput.value = '';
-    sendBtn.innerHTML = '<i class="fas fa-thumbs-up"></i>';
 }
 
-socket.on('room-message', (data) => {
-    // Data should contain roomId if we want global updates, currently server might not send it.
-    // Assuming server sends msg along with roomId or we infer.
-    // If not, we can only update active chat.
+socket.on('room-message', (msg) => {
     if (currentChat && currentChat.type === 'room') {
-        if (currentChat.data && currentChat.data.type === 'music') appendMusicChatMessage(data);
-        else appendMessageUI(data);
-    }
-
-    // Optimistic fallback for snippet update if server provides room ID
-    if (data.roomId) {
-        const r = allRooms.find(r => r.id === data.roomId);
-        if (r) { if (!r.messages) r.messages = []; r.messages.push(data); renderUnifiedList(); }
+        if (currentChat.data && currentChat.data.type === 'music') appendMusicChatMessage(msg);
+        else appendMessageUI(msg);
     }
 });
 
 socket.on('private-message', (msg) => {
-    // Update snippet
-    const u = onlineUsersList.find(user => user.username === msg.from);
-    if (u) { u.lastMessage = msg.text; renderUnifiedList(); }
-
     if (currentChat && currentChat.type === 'dm' && currentChat.id === msg.from) {
         appendMessageUI(msg);
         socket.emit('message-read', { messageId: msg.id, from: msg.from });
@@ -482,29 +410,24 @@ function updateMembersList(members) {
 musicSendBtn.addEventListener('click', sendMusicChat);
 musicChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMusicChat(); });
 function sendMusicChat() {
-    const text = musicChatInput.value.trim() || '👍';
-    if (!currentChat) return;
+    const text = musicChatInput.value.trim();
+    if (!text || !currentChat) return;
     const msg = { id: Date.now().toString(), from: currentUser.username, text, timestamp: new Date().toISOString(), type: 'message' };
     appendMusicChatMessage(msg);
     socket.emit('room-message', { text });
     musicChatInput.value = '';
 }
-let lastMusicMessageSender = null;
-function renderMusicChat(messages) { musicChatMessages.innerHTML = ''; lastMusicMessageSender = null; messages.forEach(msg => appendMusicChatMessage(msg)); }
+function renderMusicChat(messages) { musicChatMessages.innerHTML = ''; messages.forEach(msg => appendMusicChatMessage(msg)); }
 function appendMusicChatMessage(msg) {
     if (msg.type === 'system') {
         const div = document.createElement('div');
         div.className = 'system-message';
         div.innerHTML = `<i class="fas fa-info-circle"></i> ${escapeHtml(msg.text)}`;
         musicChatMessages.appendChild(div);
-        lastMusicMessageSender = null;
     } else {
         const isSent = msg.from === currentUser?.username;
-        const isGrouped = lastMusicMessageSender === msg.from;
-        lastMusicMessageSender = msg.from;
-
         const row = document.createElement('div');
-        row.className = `ms-msg-row ${isSent ? 'sent' : 'received'} ${isGrouped ? 'grouped' : ''}`;
+        row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
         row.innerHTML = `<div class="ms-msg-bubble">${escapeHtml(msg.text)}</div>`;
         musicChatMessages.appendChild(row);
     }
@@ -810,12 +733,43 @@ createRoomModal.addEventListener('click', (e) => {
 musicPlayer.volume = 0.7;
 
 // ==================== MOBILE SIDEBAR ====================
+const mobileMenuToggle = $('mobile-menu-toggle');
+const sidebarEl = $('sidebar');
+const sidebarOverlay = $('sidebar-overlay');
 
-// Mobile Sidebar Toggle
+function openSidebar() {
+    if (sidebarEl) sidebarEl.classList.add('active');
+    if (sidebarOverlay) sidebarOverlay.classList.add('active');
+}
+
+function closeSidebar() {
+    if (sidebarEl) sidebarEl.classList.remove('active');
+    if (sidebarOverlay) sidebarOverlay.classList.remove('active');
+}
+
 if (mobileMenuToggle) {
     mobileMenuToggle.addEventListener('click', () => {
-        msSidebar.classList.toggle('hidden');
+        if (sidebarEl && sidebarEl.classList.contains('active')) {
+            closeSidebar();
+        } else {
+            openSidebar();
+        }
     });
 }
 
+if (sidebarOverlay) {
+    sidebarOverlay.addEventListener('click', closeSidebar);
+}
 
+// Auto-close sidebar on mobile when joining a room or opening DM
+const originalJoinRoom = joinRoom;
+joinRoom = function (roomId) {
+    closeSidebar();
+    originalJoinRoom(roomId);
+};
+
+const originalOpenDM = openDM;
+openDM = function (username) {
+    closeSidebar();
+    originalOpenDM(username);
+};
