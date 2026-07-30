@@ -4,14 +4,22 @@ const socket = io();
 // ==================== STATE ====================
 let currentUser = null;
 let currentRoom = null;
+let currentChat = null;
 let currentDMUser = null;
 let localStream = null;
-let peerConnection = null;
+let peerConnections = new Map(); // username -> RTCPeerConnection
+let activeCallRoomId = null;
+let activeCallTargetDM = null;
+let callMediaStates = new Map(); // username -> { audioEnabled, videoEnabled }
+let isCallMinimized = false;
 let callTarget = null;
 let musicPlayer = null;
 let currentTrackIndex = -1;
 let playlist = [];
 let isMusicHost = false;
+let roomListCache = [];
+let onlineUsersCache = [];
+let unreadDmCounts = new Map();
 
 // ==================== DOM ELEMENTS ====================
 const $ = (id) => document.getElementById(id);
@@ -32,6 +40,7 @@ const confirmCreateRoom = $('confirm-create-room');
 const cancelCreateRoom = $('cancel-create-room');
 const roomNameEl = $('room-name');
 const roomMembersCount = $('room-members-count');
+const activeChatAvatar = $('active-chat-avatar');
 const welcomePanel = $('welcome-panel');
 const chatPanel = $('chat-panel');
 const musicPanel = $('music-panel');
@@ -55,9 +64,14 @@ const dmSendBtn = $('dm-send-btn');
 const closeDmBtn = $('close-dm-btn');
 const dmVideoCallBtn = $('dm-video-call-btn');
 const videoOverlay = $('video-overlay');
-const localVideo = $('local-video');
-const remoteVideo = $('remote-video');
-const remoteLabel = $('remote-label');
+const videoGrid = $('video-grid');
+const videoHeader = $('video-header');
+const videoContainer = $('video-container');
+const callTitleText = $('call-title-text');
+const callParticipantCount = $('call-participant-count');
+const minimizeCallBtn = $('minimize-call-btn');
+const maximizeCallBtn = $('maximize-call-btn');
+const togglePipBtn = $('toggle-pip-btn');
 const toggleMicBtn = $('toggle-mic-btn');
 const toggleCamBtn = $('toggle-cam-btn');
 const endCallBtn = $('end-call-btn');
@@ -70,6 +84,7 @@ const leaveMusicBtn = $('leave-music-btn');
 const musicRoomMembers = $('music-room-members');
 const trackTitle = $('track-title');
 const trackArtist = $('track-artist');
+const trackSource = $('track-source');
 const albumArt = $('album-art');
 const vinylSpin = $('vinyl-spin');
 const playBtn = $('play-btn');
@@ -80,7 +95,10 @@ const progressFill = $('progress-fill');
 const currentTimeEl = $('current-time');
 const totalTimeEl = $('total-time');
 const volumeSlider = $('volume-slider');
+const volumeIcon = $('volume-icon');
 const playlistItems = $('playlist-items');
+const musicUploadBtn = $('music-upload-btn');
+const musicUploadInput = $('music-upload-input');
 const musicChatMessages = $('music-chat-messages');
 const musicChatInput = $('music-chat-input');
 const musicSendBtn = $('music-send-btn');
@@ -139,6 +157,105 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function normalizeMembers(members) {
+    return (members || []).map(member => {
+        if (typeof member === 'string') {
+            return { username: member, active: true };
+        }
+        return {
+            username: member.username,
+            active: member.active !== false
+        };
+    });
+}
+
+function getMemberUsername(member) {
+    return typeof member === 'string' ? member : member.username;
+}
+
+function getMemberActive(member) {
+    return typeof member === 'string' ? true : member.active !== false;
+}
+
+function formatMemberSummary(members) {
+    const normalized = normalizeMembers(members);
+    const activeCount = normalized.filter(member => member.active).length;
+    return `${activeCount} active / ${normalized.length} total`;
+}
+
+function setActiveChatAvatar(label, avatarClass = '') {
+    if (!activeChatAvatar) return;
+    activeChatAvatar.textContent = '';
+    activeChatAvatar.className = `avatar-sm ${avatarClass}`.trim();
+    if (label?.startsWith('<i')) {
+        activeChatAvatar.innerHTML = label;
+    } else {
+        activeChatAvatar.textContent = label;
+    }
+}
+
+function getUnreadCount(username) {
+    return unreadDmCounts.get(username) || 0;
+}
+
+function setUnreadCount(username, count) {
+    if (count > 0) unreadDmCounts.set(username, count);
+    else unreadDmCounts.delete(username);
+    renderOnlineUsers(onlineUsersCache);
+}
+
+function bumpUnreadCount(username) {
+    setUnreadCount(username, getUnreadCount(username) + 1);
+}
+
+function renderRoomList(rooms) {
+    roomList.innerHTML = '';
+    rooms.forEach(room => {
+        const isMusic = room.type === 'music';
+        const isActive = currentChat && currentChat.type === 'room' && currentChat.id === room.id;
+        const div = document.createElement('div');
+        div.className = `room-item ${isActive ? 'active' : ''}`;
+        div.innerHTML = `
+      <div class="room-icon ${room.type}">
+        <i class="fas fa-${isMusic ? 'music' : 'hashtag'}"></i>
+      </div>
+      <div class="room-info">
+        <div class="room-title">${escapeHtml(room.name)}</div>
+        <div class="room-meta">${room.activeMemberCount || 0} active / ${room.memberCount || 0} total</div>
+      </div>
+    `;
+        div.addEventListener('click', () => joinRoom(room.id));
+        roomList.appendChild(div);
+    });
+}
+
+function renderOnlineUsers(users) {
+    onlineCount.textContent = users.length;
+    onlineUsers.innerHTML = '';
+    users.forEach(user => {
+        const isMe = currentUser && user.username === currentUser.username;
+        const unreadCount = getUnreadCount(user.username);
+        const div = document.createElement('div');
+        div.className = `user-item ${isMe ? 'is-me' : ''}`;
+        div.innerHTML = `
+      <div class="avatar-sm ${getAvatarColor(user.username)}">${getInitials(user.username)}</div>
+      <span class="status-dot"></span>
+      <span class="user-name">${escapeHtml(user.username)}${isMe ? ' (you)' : ''}</span>
+      ${unreadCount > 0 ? `<span class="unread-pill">${unreadCount}</span>` : ''}
+      ${!isMe ? '<span class="dm-badge"><i class="fas fa-envelope"></i></span>' : ''}
+    `;
+        if (!isMe) {
+            div.addEventListener('click', () => openDM(user.username));
+        }
+        onlineUsers.appendChild(div);
+    });
+}
+
+function renderUnifiedList() {
+    renderRoomList(roomListCache);
+    renderOnlineUsers(onlineUsersCache);
+}
+
 // ==================== LOGIN ====================
 loginBtn.addEventListener('click', doLogin);
 usernameInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') doLogin(); });
@@ -162,6 +279,11 @@ function doLogin() {
             loginScreen.classList.remove('active');
             appScreen.classList.add('active');
             showToast(`Welcome, ${currentUser.username}!`, 'success');
+
+            socket.emit('get-dm-unread-summary', (summary) => {
+                unreadDmCounts = new Map(Object.entries(summary?.unread || {}).map(([username, count]) => [username, Number(count)]));
+                renderOnlineUsers(onlineUsersCache);
+            });
         } else {
             loginError.textContent = res.error;
             loginBtn.disabled = false;
@@ -172,45 +294,14 @@ function doLogin() {
 
 // ==================== ROOM LIST ====================
 socket.on('room-list', (rooms) => {
-    roomList.innerHTML = '';
-    rooms.forEach(room => {
-        const isMusic = room.type === 'music';
-        const isActive = currentRoom && currentRoom.id === room.id;
-        const div = document.createElement('div');
-        div.className = `room-item ${isActive ? 'active' : ''}`;
-        div.innerHTML = `
-      <div class="room-icon ${room.type}">
-        <i class="fas fa-${isMusic ? 'music' : 'hashtag'}"></i>
-      </div>
-      <div class="room-info">
-        <div class="room-title">${escapeHtml(room.name)}</div>
-        <div class="room-meta">${room.memberCount} member${room.memberCount !== 1 ? 's' : ''}</div>
-      </div>
-    `;
-        div.addEventListener('click', () => joinRoom(room.id));
-        roomList.appendChild(div);
-    });
+        roomListCache = rooms || [];
+        renderRoomList(roomListCache);
 });
 
 // ==================== ONLINE USERS ====================
 socket.on('online-users', (users) => {
-    onlineCount.textContent = users.length;
-    onlineUsers.innerHTML = '';
-    users.forEach(user => {
-        const isMe = currentUser && user.username === currentUser.username;
-        const div = document.createElement('div');
-        div.className = `user-item ${isMe ? 'is-me' : ''}`;
-        div.innerHTML = `
-      <div class="avatar-sm ${getAvatarColor(user.username)}">${getInitials(user.username)}</div>
-      <span class="status-dot"></span>
-      <span class="user-name">${escapeHtml(user.username)}${isMe ? ' (you)' : ''}</span>
-      ${!isMe ? '<span class="dm-badge"><i class="fas fa-envelope"></i></span>' : ''}
-    `;
-        if (!isMe) {
-            div.addEventListener('click', () => openDM(user.username));
-        }
-        onlineUsers.appendChild(div);
-    });
+    onlineUsersCache = users || [];
+    renderOnlineUsers(onlineUsersCache);
 });
 
 // ==================== CREATE ROOM ====================
@@ -241,10 +332,11 @@ function joinRoom(roomId) {
         if (!res.success) { showToast(res.error, 'error'); return; }
 
         currentChat = { type: 'room', id: roomId, name: res.room.name, data: res.room };
+        currentRoom = currentChat;
 
         if (res.room.type === 'music') {
             showPanel(musicPanel);
-            musicRoomMembers.textContent = `${res.room.members.length} listening`;
+            musicRoomMembers.textContent = formatMemberSummary(res.room.members);
             playlist = res.playlist || [];
             renderPlaylist();
             renderMusicChat(res.room.messages);
@@ -252,9 +344,8 @@ function joinRoom(roomId) {
         } else {
             showPanel(chatPanel);
             roomNameEl.textContent = res.room.name;
-            roomMembersCount.textContent = `${res.room.members.length} members`;
-            activeChatAvatar.innerHTML = `<i class="fas fa-users"></i>`;
-            activeChatAvatar.className = `avatar-sm avatar-color-5`;
+            roomMembersCount.textContent = formatMemberSummary(res.room.members);
+            setActiveChatAvatar('<i class="fas fa-users"></i>', 'avatar-color-5');
             renderChatMessages(res.room.messages);
             updateMembersList(res.room.members);
             chatInput.focus();
@@ -265,17 +356,19 @@ function joinRoom(roomId) {
 
 function openDM(username) {
     currentChat = { type: 'dm', id: username, name: username };
+    currentDMUser = username;
     showPanel(chatPanel);
     roomNameEl.textContent = username;
     roomMembersCount.textContent = 'Active now';
-    activeChatAvatar.innerHTML = getInitials(username);
-    activeChatAvatar.className = `avatar-sm ${getAvatarColor(username)}`;
+    setActiveChatAvatar(getInitials(username), getAvatarColor(username));
 
     socket.emit('get-private-chat', username, (res) => {
-        renderChatMessages(res.messages || []);
-        res.messages.filter(m => m.from === username && !m.read).forEach(m => {
+        const messages = res.messages || [];
+        renderChatMessages(messages);
+        messages.filter(m => m.from === username && !m.read).forEach(m => {
             socket.emit('message-read', { messageId: m.id, from: m.from });
         });
+        setUnreadCount(username, 0);
     });
     renderUnifiedList();
     chatInput.focus();
@@ -296,12 +389,13 @@ function leaveRoom() {
 
 function closeChat() {
     currentChat = null;
+    currentDMUser = null;
     showPanel(welcomePanel);
     membersSidebar.classList.remove('active');
     if (musicPlayer) {
         musicPlayer.pause();
-        vinylSpin.classList.remove('spinning');
-        playBtn.innerHTML = '<i class="fas fa-play"></i>';
+        stopYouTubePlayer();
+        setPlayingUI(false);
     }
     renderUnifiedList();
 }
@@ -372,23 +466,32 @@ socket.on('private-message', (msg) => {
         socket.emit('message-read', { messageId: msg.id, from: msg.from });
     } else {
         showToast(`💬 New DM from ${msg.from}`, 'info');
+        bumpUnreadCount(msg.from);
     }
 });
 
 socket.on('user-joined-room', (data) => {
     if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
-        if (!currentChat.data.members.includes(data.username)) currentChat.data.members.push(data.username);
+        const members = normalizeMembers(currentChat.data.members);
+        const existing = members.find(member => member.username === data.username);
+        if (existing) existing.active = true;
+        else members.push({ username: data.username, active: true });
+        currentChat.data.members = members;
         updateMembersList(currentChat.data.members);
-        roomMembersCount.textContent = `${currentChat.data.members.length} members`;
+        roomMembersCount.textContent = formatMemberSummary(currentChat.data.members);
         showToast(`${data.username} joined`, 'info');
     }
 });
 socket.on('user-left-room', (data) => {
     if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
-        currentChat.data.members = currentChat.data.members.filter(m => m !== data.username);
+        const members = normalizeMembers(currentChat.data.members);
+        const existing = members.find(member => member.username === data.username);
+        if (existing) existing.active = false;
+        else members.push({ username: data.username, active: false });
+        currentChat.data.members = members;
         updateMembersList(currentChat.data.members);
-        roomMembersCount.textContent = `${currentChat.data.members.length} members`;
-        showToast(`${data.username} left`, 'warning');
+        roomMembersCount.textContent = formatMemberSummary(currentChat.data.members);
+        showToast(data.active === false ? `${data.username} is inactive` : `${data.username} left`, 'warning');
     }
 });
 
@@ -398,10 +501,10 @@ closeMembersBtn.addEventListener('click', () => membersSidebar.classList.remove(
 function updateMembersList(members) {
     if (!membersList) return;
     membersList.innerHTML = '';
-    members.forEach(m => {
+    normalizeMembers(members).forEach(m => {
         const div = document.createElement('div');
-        div.className = 'member-item';
-        div.innerHTML = `<div class="avatar-sm ${getAvatarColor(m)}">${getInitials(m)}</div> <span>${escapeHtml(m)}</span>`;
+        div.className = `member-item ${m.active ? 'active' : 'inactive'}`;
+        div.innerHTML = `<div class="avatar-sm ${getAvatarColor(m.username)}">${getInitials(m.username)}</div> <span>${escapeHtml(m.username)}</span><span class="member-state ${m.active ? 'active' : 'inactive'}">${m.active ? 'active' : 'inactive'}</span>`;
         membersList.appendChild(div);
     });
 }
@@ -434,106 +537,471 @@ function appendMusicChatMessage(msg) {
     musicChatMessages.scrollTop = musicChatMessages.scrollHeight;
 }
 
-// ==================== VIDEO CALL (WebRTC) ====================
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = String(reader.result || '');
+            resolve(result.split(',')[1] || '');
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+    });
+}
+
+if (musicUploadBtn && musicUploadInput) {
+    musicUploadBtn.addEventListener('click', () => musicUploadInput.click());
+    musicUploadInput.addEventListener('change', async () => {
+        const file = musicUploadInput.files && musicUploadInput.files[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('audio/')) {
+            showToast('Please choose an audio file', 'error');
+            musicUploadInput.value = '';
+            return;
+        }
+
+        try {
+            const base64 = await readFileAsBase64(file);
+            socket.emit('music-upload-track', {
+                fileName: file.name,
+                mimeType: file.type,
+                base64,
+                title: file.name.replace(/\.[^.]+$/, ''),
+                artist: currentUser?.username || 'Unknown',
+                cover: '🎧'
+            }, (res) => {
+                if (res?.success) {
+                    playlist = res.playlist || playlist;
+                    renderPlaylist();
+                    showToast(`Uploaded ${res.track.title}`, 'success');
+                } else {
+                    showToast(res?.error || 'Failed to upload track', 'error');
+                }
+            });
+        } catch (error) {
+            showToast('Failed to read audio file', 'error');
+        } finally {
+            musicUploadInput.value = '';
+        }
+    });
+}
+
+// ==================== YOUTUBE MUSIC ====================
+const youtubeBtn = $('youtube-btn');
+const youtubeInputWrapper = $('youtube-input-wrapper');
+const youtubeUrlInput = $('youtube-url-input');
+const youtubeAddBtn = $('youtube-add-btn');
+const youtubeCancelBtn = $('youtube-cancel-btn');
+
+if (youtubeBtn) {
+    youtubeBtn.addEventListener('click', () => {
+        youtubeInputWrapper.style.display = youtubeInputWrapper.style.display === 'none' ? 'block' : 'none';
+        if (youtubeInputWrapper.style.display !== 'none') {
+            youtubeUrlInput.focus();
+        }
+    });
+}
+
+if (youtubeAddBtn) {
+    youtubeAddBtn.addEventListener('click', async () => {
+        const url = youtubeUrlInput.value.trim();
+        if (!url) {
+            showToast('Paste a YouTube URL', 'error');
+            return;
+        }
+
+        const videoId = extractYouTubeId(url);
+        if (!videoId) {
+            showToast('Invalid YouTube URL. Use: youtube.com/watch?v=... or youtu.be/...', 'error');
+            return;
+        }
+
+        showToast('Fetching video info...', 'info');
+        
+        // Fetch metadata from server
+        socket.emit('fetch-youtube-metadata', url, (res) => {
+            const title = res?.title || `YouTube Video - ${videoId.substring(0, 8)}`;
+            const duration = res?.duration || 'Unknown';
+            
+            const newTrack = {
+                id: `youtube-${Date.now()}`,
+                title: title,
+                artist: currentUser?.username || 'Unknown',
+                file: url,
+                type: 'youtube',
+                cover: '▶️',
+                duration: duration
+            };
+
+            // Emit to server to add to everyone's playlist
+            socket.emit('music-add-youtube', newTrack, (res) => {
+                if (res?.success) {
+                    playlist = res.playlist || playlist;
+                    renderPlaylist();
+                    youtubeUrlInput.value = '';
+                    youtubeInputWrapper.style.display = 'none';
+                    showToast(`Added: ${title}`, 'success');
+                } else {
+                    showToast(res?.error || 'Failed to add YouTube track', 'error');
+                }
+            });
+        });
+    });
+}
+
+if (youtubeCancelBtn) {
+    youtubeCancelBtn.addEventListener('click', () => {
+        youtubeInputWrapper.style.display = 'none';
+        youtubeUrlInput.value = '';
+    });
+}
+
+// Allow Enter key in YouTube URL input
+if (youtubeUrlInput) {
+    youtubeUrlInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') youtubeAddBtn.click();
+    });
+}
+
+// ==================== MULTI-USER VIDEO CALL (WebRTC Mesh) & FLOATING PIP ====================
 
 const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
-videoCallBtn.addEventListener('click', () => {
-    if (!currentChat) return;
-    let target = currentChat.type === 'dm' ? currentChat.id : currentChat.data.members.filter(m => m !== currentUser.username)[0];
-    if (target) startCall(target);
-    else showToast('No one to call', 'warning');
-});
+// Event listeners for starting calls
+if (videoCallBtn) {
+    videoCallBtn.addEventListener('click', () => {
+        if (!currentChat) return;
+        if (currentChat.type === 'room') {
+            startOrJoinRoomCall(currentChat.id, currentChat.name);
+        } else if (currentChat.type === 'dm') {
+            startDirectCall(currentChat.id);
+        }
+    });
+}
 
+if (dmVideoCallBtn) {
+    dmVideoCallBtn.addEventListener('click', () => {
+        if (currentDMUser) {
+            startDirectCall(currentDMUser);
+        }
+    });
+}
 
+// Minimize / Maximize / Floating PIP Toggle
+if (minimizeCallBtn) minimizeCallBtn.addEventListener('click', minimizeCall);
+if (maximizeCallBtn) maximizeCallBtn.addEventListener('click', maximizeCall);
+if (togglePipBtn) togglePipBtn.addEventListener('click', toggleCallMinimize);
 
-async function startCall(username) {
-    callTarget = username;
+function minimizeCall() {
+    isCallMinimized = true;
+    videoOverlay.classList.add('minimized');
+    if (minimizeCallBtn) minimizeCallBtn.style.display = 'none';
+    if (maximizeCallBtn) maximizeCallBtn.style.display = 'flex';
+}
+
+function maximizeCall() {
+    isCallMinimized = false;
+    videoOverlay.classList.remove('minimized');
+    videoOverlay.style.left = '';
+    videoOverlay.style.top = '';
+    videoOverlay.style.bottom = '';
+    videoOverlay.style.right = '';
+    if (minimizeCallBtn) minimizeCallBtn.style.display = 'flex';
+    if (maximizeCallBtn) maximizeCallBtn.style.display = 'none';
+}
+
+function toggleCallMinimize() {
+    if (isCallMinimized) maximizeCall();
+    else minimizeCall();
+}
+
+// Make floating window draggable when minimized
+let isDraggingCall = false;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+
+if (videoHeader) {
+    videoHeader.addEventListener('mousedown', (e) => {
+        if (!isCallMinimized) return;
+        if (e.target.closest('button')) return;
+        isDraggingCall = true;
+        const rect = videoOverlay.getBoundingClientRect();
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+        document.addEventListener('mousemove', onDragCall);
+        document.addEventListener('mouseup', onStopDragCall);
+    });
+}
+
+function onDragCall(e) {
+    if (!isDraggingCall) return;
+    const x = Math.max(10, Math.min(window.innerWidth - 370, e.clientX - dragOffsetX));
+    const y = Math.max(10, Math.min(window.innerHeight - 290, e.clientY - dragOffsetY));
+    videoOverlay.style.left = `${x}px`;
+    videoOverlay.style.top = `${y}px`;
+    videoOverlay.style.right = 'auto';
+    videoOverlay.style.bottom = 'auto';
+}
+
+function onStopDragCall() {
+    isDraggingCall = false;
+    document.removeEventListener('mousemove', onDragCall);
+    document.removeEventListener('mouseup', onStopDragCall);
+}
+
+// --- Start or Join Room Group Call ---
+async function startOrJoinRoomCall(roomId, roomName) {
+    if (activeCallRoomId || peerConnections.size > 0) {
+        showToast('You are already in a video call', 'warning');
+        return;
+    }
+
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream;
+        activeCallRoomId = roomId;
+        activeCallTargetDM = null;
+        if (callTitleText) callTitleText.textContent = `📹 Call — ${roomName || roomId}`;
+
+        await acquireLocalMedia();
         videoOverlay.classList.add('active');
-        remoteLabel.textContent = username;
 
-        peerConnection = new RTCPeerConnection(rtcConfig);
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-        peerConnection.onicecandidate = (e) => {
-            if (e.candidate) {
-                socket.emit('ice-candidate', { to: callTarget, candidate: e.candidate });
+        // Join room video call session on server
+        socket.emit('join-video-call', { roomId }, (res) => {
+            if (!res?.success) {
+                showToast(res?.error || 'Failed to join video call', 'error');
+                endCall();
+                return;
             }
-        };
 
-        peerConnection.ontrack = (e) => {
-            remoteVideo.srcObject = e.streams[0];
-        };
+            const existingParticipants = res.participants || [];
+            updateCallHeader(existingParticipants.length + 1);
+            showToast(`Joined video call with ${existingParticipants.length} member(s)`, 'success');
 
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.emit('call-user', { to: username, offer });
-        showToast(`Calling ${username}...`, 'info');
+            // Connect to each existing participant via WebRTC
+            existingParticipants.forEach((username) => {
+                createPeerConnection(username, true);
+            });
+        });
     } catch (err) {
+        console.error('Error starting video call:', err);
         showToast('Camera/Microphone access denied', 'error');
         endCall();
     }
 }
 
-// Incoming call
-socket.on('incoming-call', async (data) => {
-    callTarget = data.from;
-    callerName.textContent = `${data.from} is calling you...`;
-    incomingCallModal.classList.add('active');
+// --- Start Direct 1-on-1 Call ---
+async function startDirectCall(targetUsername) {
+    if (activeCallRoomId || peerConnections.size > 0) {
+        showToast('You are already in a video call', 'warning');
+        return;
+    }
 
-    acceptCallBtn.onclick = async () => {
-        incomingCallModal.classList.remove('active');
-        try {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            localVideo.srcObject = localStream;
-            videoOverlay.classList.add('active');
-            remoteLabel.textContent = data.from;
+    try {
+        activeCallTargetDM = targetUsername;
+        activeCallRoomId = null;
+        if (callTitleText) callTitleText.textContent = `📹 Call — ${targetUsername}`;
 
-            peerConnection = new RTCPeerConnection(rtcConfig);
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        await acquireLocalMedia();
+        videoOverlay.classList.add('active');
 
-            peerConnection.onicecandidate = (e) => {
-                if (e.candidate) {
-                    socket.emit('ice-candidate', { to: callTarget, candidate: e.candidate });
-                }
-            };
+        createPeerConnection(targetUsername, true);
+        showToast(`Calling ${targetUsername}...`, 'info');
+    } catch (err) {
+        console.error('Error starting direct call:', err);
+        showToast('Camera/Microphone access denied', 'error');
+        endCall();
+    }
+}
 
-            peerConnection.ontrack = (e) => {
-                remoteVideo.srcObject = e.streams[0];
-            };
+// --- Media Acquisition & Video Tile Rendering ---
+async function acquireLocalMedia() {
+    if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    }
+    renderVideoTile(currentUser.username, true, localStream);
+    sendLocalMediaState();
+}
 
-            await peerConnection.setRemoteDescription(data.offer);
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            socket.emit('call-accepted', { to: data.from, answer });
-        } catch (err) {
-            showToast('Camera/Microphone access denied', 'error');
-            endCall();
+function updateCallHeader(totalCount) {
+    const count = totalCount !== undefined ? totalCount : (peerConnections.size + 1);
+    if (callParticipantCount) {
+        callParticipantCount.textContent = `${count} participant${count > 1 ? 's' : ''}`;
+    }
+}
+
+function renderVideoTile(username, isSelf, stream) {
+    let tile = $(`video-tile-${username}`);
+    if (!tile) {
+        tile = document.createElement('div');
+        tile.id = `video-tile-${username}`;
+        tile.className = `video-box ${isSelf ? 'video-self-tile' : ''}`;
+        tile.innerHTML = `
+            <video id="video-elem-${username}" autoplay playsinline ${isSelf ? 'muted' : ''}></video>
+            <div class="video-avatar-fallback" id="video-fallback-${username}">
+                <div class="avatar-lg ${getAvatarColor(username)}">${getInitials(username)}</div>
+            </div>
+            <span class="video-label">
+                <i class="fas fa-${isSelf ? 'user' : 'video'}"></i> ${escapeHtml(username)}${isSelf ? ' (You)' : ''}
+            </span>
+            <div class="video-status" id="video-status-${username}"></div>
+        `;
+        if (videoGrid) videoGrid.appendChild(tile);
+    }
+
+    const videoElem = $(`video-elem-${username}`);
+    if (videoElem && stream) {
+        videoElem.srcObject = stream;
+    }
+
+    updateVideoTileMediaState(username);
+}
+
+function removeVideoTile(username) {
+    const tile = $(`video-tile-${username}`);
+    if (tile) tile.remove();
+}
+
+function updateVideoTileMediaState(username) {
+    const isSelf = currentUser && username === currentUser.username;
+    let audioEnabled = true;
+    let videoEnabled = true;
+
+    if (isSelf) {
+        audioEnabled = !!localStream?.getAudioTracks()[0]?.enabled;
+        videoEnabled = !!localStream?.getVideoTracks()[0]?.enabled;
+    } else {
+        const state = callMediaStates.get(username);
+        if (state) {
+            audioEnabled = state.audioEnabled !== false;
+            videoEnabled = state.videoEnabled !== false;
+        }
+    }
+
+    const fallback = $(`video-fallback-${username}`);
+    if (fallback) {
+        fallback.style.display = videoEnabled ? 'none' : 'flex';
+    }
+
+    const statusElem = $(`video-status-${username}`);
+    if (statusElem) {
+        const labels = [];
+        if (!audioEnabled) labels.push('<i class="fas fa-microphone-slash"></i> Muted');
+        if (!videoEnabled) labels.push('<i class="fas fa-video-slash"></i> Cam Off');
+        statusElem.innerHTML = labels.join(' ');
+        statusElem.classList.toggle('active', labels.length > 0);
+    }
+}
+
+// --- WebRTC Peer Connection Helper ---
+function createPeerConnection(targetUsername, isInitiator) {
+    if (peerConnections.has(targetUsername)) {
+        peerConnections.get(targetUsername).close();
+    }
+
+    const pc = new RTCPeerConnection(rtcConfig);
+    peerConnections.set(targetUsername, pc);
+
+    if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    pc.onicecandidate = (e) => {
+        if (e.candidate) {
+            socket.emit('ice-candidate', { to: targetUsername, candidate: e.candidate });
         }
     };
 
-    rejectCallBtn.onclick = () => {
-        incomingCallModal.classList.remove('active');
-        socket.emit('call-rejected', { to: data.from });
+    pc.ontrack = (e) => {
+        if (e.streams && e.streams[0]) {
+            renderVideoTile(targetUsername, false, e.streams[0]);
+            updateCallHeader();
+        }
     };
+
+    if (isInitiator) {
+        pc.createOffer().then(offer => {
+            return pc.setLocalDescription(offer).then(() => {
+                socket.emit('call-user', { to: targetUsername, offer });
+            });
+        }).catch(err => console.error('Error creating offer:', err));
+    }
+
+    return pc;
+}
+
+// --- WebRTC Signaling Socket Listeners ---
+socket.on('user-joined-video-call', (data) => {
+    if (activeCallRoomId && data.roomId === activeCallRoomId) {
+        showToast(`${data.username} joined the video call`, 'info');
+        createPeerConnection(data.username, true);
+    }
+});
+
+socket.on('incoming-call-offer', async (data) => {
+    if (!activeCallRoomId && peerConnections.size === 0) {
+        callTarget = data.from;
+        if (callerName) callerName.textContent = `${data.from} is calling you...`;
+        if (incomingCallModal) incomingCallModal.classList.add('active');
+
+        if (acceptCallBtn) {
+            acceptCallBtn.onclick = async () => {
+                if (incomingCallModal) incomingCallModal.classList.remove('active');
+                try {
+                    activeCallTargetDM = data.from;
+                    if (callTitleText) callTitleText.textContent = `📹 Private Call — ${data.from}`;
+                    await acquireLocalMedia();
+                    videoOverlay.classList.add('active');
+
+                    const pc = createPeerConnection(data.from, false);
+                    await pc.setRemoteDescription(data.offer);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socket.emit('call-accepted', { to: data.from, answer });
+                } catch (err) {
+                    showToast('Camera/Microphone access denied', 'error');
+                    endCall();
+                }
+            };
+        }
+
+        if (rejectCallBtn) {
+            rejectCallBtn.onclick = () => {
+                if (incomingCallModal) incomingCallModal.classList.remove('active');
+                socket.emit('call-rejected', { to: data.from });
+            };
+        }
+    } else if (activeCallRoomId) {
+        try {
+            const pc = createPeerConnection(data.from, false);
+            await pc.setRemoteDescription(data.offer);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit('call-accepted', { to: data.from, answer });
+        } catch (err) {
+            console.error('Error answering room peer offer:', err);
+        }
+    }
 });
 
 socket.on('call-accepted', async (data) => {
-    if (peerConnection) {
-        await peerConnection.setRemoteDescription(data.answer);
+    const pc = peerConnections.get(data.from);
+    if (pc && data.answer) {
+        try {
+            await pc.setRemoteDescription(data.answer);
+        } catch (err) {
+            console.error('Error setting remote description:', err);
+        }
     }
 });
 
 socket.on('ice-candidate', async (data) => {
-    if (peerConnection) {
+    const pc = peerConnections.get(data.from);
+    if (pc && data.candidate) {
         try {
-            await peerConnection.addIceCandidate(data.candidate);
-        } catch (e) { /* ignore */ }
+            await pc.addIceCandidate(data.candidate);
+        } catch (err) { /* ignore candidate errors */ }
     }
 });
 
@@ -542,59 +1010,304 @@ socket.on('call-rejected', (data) => {
     endCall();
 });
 
-socket.on('call-ended', () => {
-    showToast('Call ended', 'info');
-    endCall();
+socket.on('user-left-video-call', (data) => {
+    showToast(`${data.username} left the video call`, 'info');
+    if (peerConnections.has(data.username)) {
+        peerConnections.get(data.username).close();
+        peerConnections.delete(data.username);
+    }
+    callMediaStates.delete(data.username);
+    removeVideoTile(data.username);
+    updateCallHeader();
 });
 
-// Toggle mic/cam
-toggleMicBtn.addEventListener('click', () => {
-    if (localStream) {
-        const audioTrack = localStream.getAudioTracks()[0];
-        if (audioTrack) {
-            audioTrack.enabled = !audioTrack.enabled;
-            toggleMicBtn.classList.toggle('muted', !audioTrack.enabled);
-            toggleMicBtn.innerHTML = `<i class="fas fa-microphone${audioTrack.enabled ? '' : '-slash'}"></i>`;
-        }
+socket.on('call-ended', (data) => {
+    if (data.from && peerConnections.has(data.from)) {
+        peerConnections.get(data.from).close();
+        peerConnections.delete(data.from);
+        removeVideoTile(data.from);
+        updateCallHeader();
+    }
+    if (activeCallTargetDM && data.from === activeCallTargetDM) {
+        showToast('Call ended', 'info');
+        endCall();
     }
 });
 
-toggleCamBtn.addEventListener('click', () => {
-    if (localStream) {
-        const videoTrack = localStream.getVideoTracks()[0];
-        if (videoTrack) {
-            videoTrack.enabled = !videoTrack.enabled;
-            toggleCamBtn.classList.toggle('muted', !videoTrack.enabled);
-            toggleCamBtn.innerHTML = `<i class="fas fa-video${videoTrack.enabled ? '' : '-slash'}"></i>`;
-        }
-    }
+socket.on('call-media-state', (data) => {
+    if (!data.from) return;
+    callMediaStates.set(data.from, {
+        audioEnabled: data.audioEnabled !== false,
+        videoEnabled: data.videoEnabled !== false
+    });
+    updateVideoTileMediaState(data.from);
 });
 
-endCallBtn.addEventListener('click', () => {
-    socket.emit('end-call', { to: callTarget });
-    endCall();
-});
+// Toggle Local Mic / Camera
+if (toggleMicBtn) {
+    toggleMicBtn.addEventListener('click', () => {
+        if (localStream) {
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                toggleMicBtn.classList.toggle('muted', !audioTrack.enabled);
+                toggleMicBtn.innerHTML = `<i class="fas fa-microphone${audioTrack.enabled ? '' : '-slash'}"></i>`;
+                sendLocalMediaState();
+                updateVideoTileMediaState(currentUser.username);
+            }
+        }
+    });
+}
+
+if (toggleCamBtn) {
+    toggleCamBtn.addEventListener('click', () => {
+        if (localStream) {
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                toggleCamBtn.classList.toggle('muted', !videoTrack.enabled);
+                toggleCamBtn.innerHTML = `<i class="fas fa-video${videoTrack.enabled ? '' : '-slash'}"></i>`;
+                sendLocalMediaState();
+                updateVideoTileMediaState(currentUser.username);
+            }
+        }
+    });
+}
+
+function sendLocalMediaState() {
+    if (!localStream) return;
+    const audioEnabled = !!localStream.getAudioTracks()[0]?.enabled;
+    const videoEnabled = !!localStream.getVideoTracks()[0]?.enabled;
+
+    if (activeCallRoomId) {
+        socket.emit('call-media-state', { roomId: activeCallRoomId, audioEnabled, videoEnabled });
+    } else if (activeCallTargetDM) {
+        socket.emit('call-media-state', { to: activeCallTargetDM, audioEnabled, videoEnabled });
+    }
+}
+
+if (endCallBtn) endCallBtn.addEventListener('click', endCall);
 
 function endCall() {
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
+    if (activeCallRoomId) {
+        socket.emit('leave-video-call', { roomId: activeCallRoomId });
+    } else if (activeCallTargetDM) {
+        socket.emit('end-call', { to: activeCallTargetDM });
     }
+
+    peerConnections.forEach((pc) => pc.close());
+    peerConnections.clear();
+    callMediaStates.clear();
+
     if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
     }
-    localVideo.srcObject = null;
-    remoteVideo.srcObject = null;
-    videoOverlay.classList.remove('active');
-    callTarget = null;
-    toggleMicBtn.classList.remove('muted');
-    toggleCamBtn.classList.remove('muted');
-    toggleMicBtn.innerHTML = '<i class="fas fa-microphone"></i>';
-    toggleCamBtn.innerHTML = '<i class="fas fa-video"></i>';
+
+    if (videoGrid) videoGrid.innerHTML = '';
+    if (videoOverlay) videoOverlay.classList.remove('active');
+    maximizeCall(); // Reset minimize state
+
+    activeCallRoomId = null;
+    activeCallTargetDM = null;
+
+    if (toggleMicBtn) {
+        toggleMicBtn.classList.remove('muted');
+        toggleMicBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+    }
+    if (toggleCamBtn) {
+        toggleCamBtn.classList.remove('muted');
+        toggleCamBtn.innerHTML = '<i class="fas fa-video"></i>';
+    }
 }
 
 // ==================== MUSIC ROOM ====================
+let ytPlayer = null;
+let isYouTubeMode = false;
+let progressInterval = null;
+let ytApiPromise = null;
+
+function loadYouTubeAPI() {
+    if (window.YT?.Player) return Promise.resolve();
+    if (ytApiPromise) return ytApiPromise;
+    ytApiPromise = new Promise((resolve) => {
+        window.onYouTubeIframeAPIReady = () => resolve();
+        const tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(tag);
+    });
+    return ytApiPromise;
+}
+
+function updateProgressUI(current, duration) {
+    if (!duration || isNaN(duration)) return;
+    progressFill.style.width = ((current / duration) * 100) + '%';
+    currentTimeEl.textContent = formatAudioTime(current);
+    totalTimeEl.textContent = formatAudioTime(duration);
+}
+
+function resetProgressUI() {
+    progressFill.style.width = '0%';
+    currentTimeEl.textContent = '0:00';
+    totalTimeEl.textContent = '0:00';
+}
+
+function startProgressPolling() {
+    stopProgressPolling();
+    progressInterval = setInterval(() => {
+        if (isYouTubeMode && ytPlayer?.getCurrentTime) {
+            updateProgressUI(ytPlayer.getCurrentTime(), ytPlayer.getDuration());
+        }
+    }, 500);
+}
+
+function stopProgressPolling() {
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+}
+
+function setPlayingUI(playing) {
+    if (playing) {
+        vinylSpin.classList.add('spinning');
+        playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+        startProgressPolling();
+    } else {
+        vinylSpin.classList.remove('spinning');
+        playBtn.innerHTML = '<i class="fas fa-play"></i>';
+        stopProgressPolling();
+    }
+}
+
+function isCurrentlyPlaying() {
+    if (isYouTubeMode && ytPlayer?.getPlayerState) {
+        return ytPlayer.getPlayerState() === 1; // YT.PlayerState.PLAYING
+    }
+    return !musicPlayer.paused && !!musicPlayer.src;
+}
+
+function getCurrentPlaybackTime() {
+    if (isYouTubeMode && ytPlayer?.getCurrentTime) return ytPlayer.getCurrentTime();
+    return musicPlayer.currentTime || 0;
+}
+
+function playCurrentTrack() {
+    if (isYouTubeMode && ytPlayer?.playVideo) {
+        ytPlayer.playVideo();
+    } else {
+        musicPlayer.play().catch(() => { });
+    }
+    setPlayingUI(true);
+}
+
+function pauseCurrentTrack() {
+    if (isYouTubeMode && ytPlayer?.pauseVideo) {
+        ytPlayer.pauseVideo();
+    } else {
+        musicPlayer.pause();
+    }
+    setPlayingUI(false);
+}
+
+function seekCurrentTrack(time) {
+    if (isYouTubeMode && ytPlayer?.seekTo) {
+        ytPlayer.seekTo(time, true);
+        updateProgressUI(time, ytPlayer.getDuration());
+    } else {
+        musicPlayer.currentTime = time;
+    }
+}
+
+function stopYouTubePlayer() {
+    if (ytPlayer?.stopVideo) ytPlayer.stopVideo();
+    isYouTubeMode = false;
+}
+
+function updateTrackSourceBadge(track) {
+    if (!trackSource) return;
+    if (!track || currentTrackIndex < 0) {
+        trackSource.className = 'track-source-badge';
+        trackSource.innerHTML = '';
+        return;
+    }
+    if (track.type === 'youtube') {
+        trackSource.className = 'track-source-badge visible youtube';
+        trackSource.innerHTML = '<i class="fab fa-youtube"></i> YouTube';
+    } else {
+        trackSource.className = 'track-source-badge visible local';
+        trackSource.innerHTML = '<i class="fas fa-file-audio"></i> Local Audio';
+    }
+}
+
+function updateAlbumArt(track) {
+    if (!albumArt) return;
+    albumArt.classList.toggle('youtube-source', track?.type === 'youtube');
+    const placeholder = albumArt.querySelector('.album-art-placeholder');
+    if (!placeholder) return;
+    if (track?.type === 'youtube') {
+        placeholder.innerHTML = '<i class="fab fa-youtube"></i>';
+    } else if (track) {
+        placeholder.innerHTML = `<span style="font-size:48px">${track.cover || '🎧'}</span>`;
+    } else {
+        placeholder.innerHTML = '<i class="fas fa-music"></i>';
+    }
+}
+
+async function loadYouTubeTrack(videoId, startSeconds = 0) {
+    await loadYouTubeAPI();
+    isYouTubeMode = true;
+    if (musicPlayer) {
+        musicPlayer.pause();
+        musicPlayer.src = '';
+    }
+
+    const playerVars = {
+        autoplay: 1,
+        controls: 0,
+        disablekb: 1,
+        fs: 0,
+        modestbranding: 1,
+        rel: 0,
+        iv_load_policy: 3,
+        playsinline: 1
+    };
+
+    if (!ytPlayer) {
+        ytPlayer = new YT.Player('youtube-player', {
+            height: '1',
+            width: '1',
+            videoId,
+            playerVars,
+            events: {
+                onReady: (e) => {
+                    e.target.setVolume(volumeSlider.value);
+                    if (startSeconds > 0) e.target.seekTo(startSeconds, true);
+                    e.target.playVideo();
+                },
+                onStateChange: (e) => {
+                    if (e.data === 1) { // PLAYING
+                        setPlayingUI(true);
+                        const dur = e.target.getDuration();
+                        if (dur) totalTimeEl.textContent = formatAudioTime(dur);
+                    } else if (e.data === 2) { // PAUSED
+                        setPlayingUI(false);
+                    } else if (e.data === 0) { // ENDED
+                        setPlayingUI(false);
+                        const idx = (currentTrackIndex + 1) % playlist.length;
+                        loadTrack(idx);
+                        playCurrentTrack();
+                        socket.emit('music-control', { action: 'play', trackId: idx, currentTime: 0 });
+                    }
+                }
+            }
+        });
+    } else {
+        ytPlayer.loadVideoById({ videoId, startSeconds: Math.floor(startSeconds) });
+        setPlayingUI(true);
+    }
+}
+
 function renderPlaylist() {
     playlistItems.innerHTML = '';
     playlist.forEach((track, i) => {
@@ -609,112 +1322,149 @@ function renderPlaylist() {
       <div class="track-dur">${track.duration}</div>
     `;
         div.addEventListener('click', () => {
-            loadTrack(i);
-            musicPlayer.play().catch(() => { });
-            vinylSpin.classList.add('spinning');
-            playBtn.innerHTML = '<i class="fas fa-pause"></i>';
-            // Sync to others
+            loadTrack(i, 0);
+            const track = playlist[i];
+            if (track.type !== 'youtube') playCurrentTrack();
             socket.emit('music-control', { action: 'play', trackId: i, currentTime: 0 });
         });
         playlistItems.appendChild(div);
     });
 }
 
-function loadTrack(index) {
+// Extract YouTube video ID from URL
+function extractYouTubeId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})/
+    ];
+    for (let pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) return match[1];
+    }
+    return null;
+}
+
+// Get YouTube embed or proxy URL
+
+function loadTrack(index, startSeconds = 0) {
     if (index < 0 || index >= playlist.length) return;
     currentTrackIndex = index;
     const track = playlist[index];
     trackTitle.textContent = track.title;
     trackArtist.textContent = track.artist;
-    albumArt.querySelector('.album-art-placeholder').innerHTML = `<span style="font-size:48px">${track.cover}</span>`;
-    musicPlayer.src = track.file;
-    musicPlayer.load();
+    updateAlbumArt(track);
+    updateTrackSourceBadge(track);
+    resetProgressUI();
+
+    if (track.type === 'youtube' && track.file) {
+        const videoId = extractYouTubeId(track.file);
+        if (videoId) {
+            loadYouTubeTrack(videoId, startSeconds);
+        } else {
+            showToast('Invalid YouTube URL', 'error');
+        }
+    } else {
+        stopYouTubePlayer();
+        if (musicPlayer) {
+            musicPlayer.src = track.file;
+            musicPlayer.load();
+            if (startSeconds > 0) musicPlayer.currentTime = startSeconds;
+        }
+    }
     renderPlaylist();
+    return track;
 }
 
 playBtn.addEventListener('click', () => {
     if (currentTrackIndex === -1 && playlist.length > 0) {
-        loadTrack(0);
+        loadTrack(0, 0);
+        if (playlist[0]?.type !== 'youtube') playCurrentTrack();
+        socket.emit('music-control', { action: 'play', trackId: 0, currentTime: 0 });
+        return;
     }
-    if (musicPlayer.paused) {
-        musicPlayer.play().catch(() => { });
-        vinylSpin.classList.add('spinning');
-        playBtn.innerHTML = '<i class="fas fa-pause"></i>';
-        socket.emit('music-control', { action: 'resume', trackId: currentTrackIndex, currentTime: musicPlayer.currentTime });
+    if (isCurrentlyPlaying()) {
+        pauseCurrentTrack();
+        socket.emit('music-control', { action: 'pause', trackId: currentTrackIndex, currentTime: getCurrentPlaybackTime() });
     } else {
-        musicPlayer.pause();
-        vinylSpin.classList.remove('spinning');
-        playBtn.innerHTML = '<i class="fas fa-play"></i>';
-        socket.emit('music-control', { action: 'pause', trackId: currentTrackIndex, currentTime: musicPlayer.currentTime });
+        playCurrentTrack();
+        socket.emit('music-control', { action: 'resume', trackId: currentTrackIndex, currentTime: getCurrentPlaybackTime() });
     }
 });
 
 prevBtn.addEventListener('click', () => {
     const idx = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-    loadTrack(idx);
-    musicPlayer.play().catch(() => { });
-    vinylSpin.classList.add('spinning');
-    playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+    loadTrack(idx, 0);
+    if (playlist[idx]?.type !== 'youtube') playCurrentTrack();
     socket.emit('music-control', { action: 'play', trackId: idx, currentTime: 0 });
 });
 
 nextBtn.addEventListener('click', () => {
     const idx = (currentTrackIndex + 1) % playlist.length;
-    loadTrack(idx);
-    musicPlayer.play().catch(() => { });
-    vinylSpin.classList.add('spinning');
-    playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+    loadTrack(idx, 0);
+    if (playlist[idx]?.type !== 'youtube') playCurrentTrack();
     socket.emit('music-control', { action: 'play', trackId: idx, currentTime: 0 });
 });
 
 musicPlayer.addEventListener('timeupdate', () => {
-    if (musicPlayer.duration) {
-        const pct = (musicPlayer.currentTime / musicPlayer.duration) * 100;
-        progressFill.style.width = pct + '%';
-        currentTimeEl.textContent = formatAudioTime(musicPlayer.currentTime);
-        totalTimeEl.textContent = formatAudioTime(musicPlayer.duration);
+    if (!isYouTubeMode && musicPlayer.duration) {
+        updateProgressUI(musicPlayer.currentTime, musicPlayer.duration);
     }
 });
 
 musicPlayer.addEventListener('ended', () => {
+    if (isYouTubeMode) return;
     const idx = (currentTrackIndex + 1) % playlist.length;
     loadTrack(idx);
-    musicPlayer.play().catch(() => { });
+    playCurrentTrack();
     socket.emit('music-control', { action: 'play', trackId: idx, currentTime: 0 });
 });
 
 progressBar.addEventListener('click', (e) => {
     const rect = progressBar.getBoundingClientRect();
     const pct = (e.clientX - rect.left) / rect.width;
-    musicPlayer.currentTime = pct * musicPlayer.duration;
-    socket.emit('music-control', { action: 'seek', trackId: currentTrackIndex, currentTime: musicPlayer.currentTime });
+    if (isYouTubeMode && ytPlayer?.getDuration) {
+        seekCurrentTrack(pct * ytPlayer.getDuration());
+    } else if (musicPlayer.duration) {
+        seekCurrentTrack(pct * musicPlayer.duration);
+    }
+    socket.emit('music-control', { action: 'seek', trackId: currentTrackIndex, currentTime: getCurrentPlaybackTime() });
 });
 
 volumeSlider.addEventListener('input', () => {
-    musicPlayer.volume = volumeSlider.value / 100;
+    const vol = volumeSlider.value;
+    musicPlayer.volume = vol / 100;
+    if (ytPlayer?.setVolume) ytPlayer.setVolume(vol);
+    if (volumeIcon) {
+        volumeIcon.className = vol == 0 ? 'fas fa-volume-mute' : vol < 50 ? 'fas fa-volume-down' : 'fas fa-volume-up';
+    }
 });
 
 // Receive music control from others
 socket.on('music-control', (data) => {
+    const track = playlist[data.trackId];
     if (data.action === 'play') {
-        loadTrack(data.trackId);
-        musicPlayer.currentTime = data.currentTime || 0;
-        musicPlayer.play().catch(() => { });
-        vinylSpin.classList.add('spinning');
-        playBtn.innerHTML = '<i class="fas fa-pause"></i>';
-        showToast(`${data.username} is playing: ${playlist[data.trackId]?.title}`, 'info');
+        loadTrack(data.trackId, data.currentTime || 0);
+        if (track?.type !== 'youtube') playCurrentTrack();
+        showToast(`${data.username} is playing: ${track?.title}`, 'info');
     } else if (data.action === 'pause') {
-        musicPlayer.pause();
-        vinylSpin.classList.remove('spinning');
-        playBtn.innerHTML = '<i class="fas fa-play"></i>';
+        pauseCurrentTrack();
     } else if (data.action === 'resume') {
-        if (data.trackId !== currentTrackIndex) loadTrack(data.trackId);
-        musicPlayer.currentTime = data.currentTime || 0;
-        musicPlayer.play().catch(() => { });
-        vinylSpin.classList.add('spinning');
-        playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+        if (data.trackId !== currentTrackIndex) {
+            loadTrack(data.trackId, data.currentTime || 0);
+        } else {
+            seekCurrentTrack(data.currentTime || 0);
+        }
+        if (track?.type !== 'youtube' || data.trackId === currentTrackIndex) playCurrentTrack();
     } else if (data.action === 'seek') {
-        musicPlayer.currentTime = data.currentTime;
+        seekCurrentTrack(data.currentTime);
+    }
+});
+
+socket.on('music-playlist-updated', (data) => {
+    playlist = data.playlist || playlist;
+    if (currentChat && currentChat.type === 'room' && currentChat.data?.type === 'music') {
+        renderPlaylist();
     }
 });
 

@@ -3,6 +3,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const fs = require('fs');
+const fsp = fs.promises;
 
 const app = express();
 const server = http.createServer(app);
@@ -12,6 +14,9 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
+const musicUploadDir = path.join(__dirname, 'public', 'music', 'uploads');
+
+fs.mkdirSync(musicUploadDir, { recursive: true });
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -21,6 +26,8 @@ const rooms = new Map();       // roomId -> { id, name, type, members: Set, mess
 const users = new Map();       // socketId -> { id, username, socketId, currentRoom }
 const privateChats = new Map(); // chatKey -> [{ from, to, text, timestamp, read }]
 const onlineUsers = new Map(); // username -> socketId
+const roomCalls = new Map();   // roomId -> Map<username, socketId>
+let musicPlaylist = []; // Start empty - only YouTube tracks supported
 
 // Create default rooms
 function createDefaultRooms() {
@@ -29,6 +36,7 @@ function createDefaultRooms() {
     name: '🏠 Lobby',
     type: 'general',
     members: new Set(),
+    presence: new Map(),
     messages: []
   };
   const musicRoom = {
@@ -36,21 +44,13 @@ function createDefaultRooms() {
     name: '🎵 Music Room',
     type: 'music',
     members: new Set(),
+    presence: new Map(),
     messages: []
   };
   rooms.set('lobby', lobby);
   rooms.set('music-room', musicRoom);
 }
 createDefaultRooms();
-
-// Music playlist
-const musicPlaylist = [
-  { id: 1, title: 'Chill Vibes', artist: 'Ambient Sounds', file: '/music/song1.mp3', duration: '3:24', cover: '🎶' },
-  { id: 2, title: 'Summer Breeze', artist: 'Lo-Fi Beats', file: '/music/song2.mp3', duration: '2:58', cover: '🌅' },
-  { id: 3, title: 'Night Drive', artist: 'Synthwave', file: '/music/song3.mp3', duration: '4:12', cover: '🌃' },
-  { id: 4, title: 'Coffee Morning', artist: 'Jazz Hop', file: '/music/song4.mp3', duration: '3:45', cover: '☕' },
-  { id: 5, title: 'Ocean Waves', artist: 'Nature Sounds', file: '/music/song5.mp3', duration: '5:01', cover: '🌊' }
-];
 
 // Helper: get private chat key
 function getChatKey(user1, user2) {
@@ -61,14 +61,40 @@ function getChatKey(user1, user2) {
 function getRoomList() {
   const list = [];
   rooms.forEach((room) => {
+    if (!room.presence) room.presence = new Map();
+    if (!room.members) room.members = new Set();
+    const activeMemberCount = Array.from(room.presence.values()).filter(Boolean).length;
     list.push({
       id: room.id,
       name: room.name,
       type: room.type,
-      memberCount: room.members.size
+      memberCount: room.members.size,
+      activeMemberCount
     });
   });
   return list;
+}
+
+function getRoomMembers(room) {
+  if (!room.presence) room.presence = new Map();
+  if (!room.members) room.members = new Set();
+  return Array.from(room.members).map((username) => ({
+    username,
+    active: room.presence.get(username) === true
+  }));
+}
+
+function setRoomPresence(roomId, username, active) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  if (!room.presence) room.presence = new Map();
+  if (!room.members) room.members = new Set();
+  room.members.add(username);
+  room.presence.set(username, active);
+}
+
+function sanitizeFileName(name) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 // Helper: get online users list
@@ -108,6 +134,25 @@ io.on('connection', (socket) => {
     io.emit('room-list', getRoomList());
   });
 
+  socket.on('get-dm-unread-summary', (callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ unread: {} });
+      return;
+    }
+
+    const unread = {};
+    privateChats.forEach((messages) => {
+      messages.forEach((message) => {
+        if (message.to === user.username && !message.read) {
+          unread[message.from] = (unread[message.from] || 0) + 1;
+        }
+      });
+    });
+
+    callback?.({ unread });
+  });
+
   // --- Create Room ---
   socket.on('create-room', (roomName, callback) => {
     const roomId = 'room-' + uuidv4().substring(0, 8);
@@ -116,6 +161,7 @@ io.on('connection', (socket) => {
       name: roomName,
       type: 'general',
       members: new Set(),
+      presence: new Map(),
       messages: []
     };
     rooms.set(roomId, room);
@@ -141,12 +187,13 @@ io.on('connection', (socket) => {
     if (user.currentRoom && user.currentRoom !== roomId) {
       const prevRoom = rooms.get(user.currentRoom);
       if (prevRoom) {
-        prevRoom.members.delete(user.username);
+        setRoomPresence(user.currentRoom, user.username, false);
         socket.leave(user.currentRoom);
         // Notify room members that user left
         socket.to(user.currentRoom).emit('user-left-room', {
           username: user.username,
           roomId: user.currentRoom,
+          active: false,
           timestamp: new Date().toISOString()
         });
         io.emit('room-list', getRoomList());
@@ -154,7 +201,7 @@ io.on('connection', (socket) => {
     }
 
     // Join new room
-    room.members.add(user.username);
+    setRoomPresence(roomId, user.username, true);
     user.currentRoom = roomId;
     socket.join(roomId);
 
@@ -164,6 +211,7 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('user-joined-room', {
       username: user.username,
       roomId,
+      active: true,
       timestamp: new Date().toISOString()
     });
 
@@ -175,7 +223,7 @@ io.on('connection', (socket) => {
         id: room.id,
         name: room.name,
         type: room.type,
-        members: Array.from(room.members),
+        members: getRoomMembers(room),
         messages: recentMessages
       },
       playlist: room.type === 'music' ? musicPlaylist : undefined
@@ -191,7 +239,7 @@ io.on('connection', (socket) => {
 
     const room = rooms.get(user.currentRoom);
     if (room) {
-      room.members.delete(user.username);
+      setRoomPresence(user.currentRoom, user.username, false);
       socket.leave(user.currentRoom);
 
       console.log(`[SERVER] ⬅️  ${user.username} left room: ${room.name}`);
@@ -199,6 +247,7 @@ io.on('connection', (socket) => {
       socket.to(user.currentRoom).emit('user-left-room', {
         username: user.username,
         roomId: user.currentRoom,
+        active: false,
         timestamp: new Date().toISOString()
       });
 
@@ -242,9 +291,6 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    const targetSocketId = onlineUsers.get(data.to);
-    if (!targetSocketId) return;
-
     const message = {
       id: uuidv4(),
       from: user.username,
@@ -261,8 +307,10 @@ io.on('connection', (socket) => {
     }
     privateChats.get(chatKey).push(message);
 
-    // Send to target user only
-    io.to(targetSocketId).emit('private-message', message);
+    const targetSocketId = onlineUsers.get(data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('private-message', message);
+    }
   });
 
   // --- Read Receipt ---
@@ -298,14 +346,66 @@ io.on('connection', (socket) => {
     callback({ messages: messages.slice(-50) });
   });
 
-  // --- Video Call Signaling ---
+  // --- Multi-User Video Call Signaling ---
+  socket.on('join-video-call', (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user || !data?.roomId) {
+      callback?.({ success: false, error: 'User not registered or invalid room' });
+      return;
+    }
+
+    if (!roomCalls.has(data.roomId)) {
+      roomCalls.set(data.roomId, new Map());
+    }
+
+    const callMap = roomCalls.get(data.roomId);
+    const existingParticipants = Array.from(callMap.keys()).filter(name => name !== user.username);
+
+    callMap.set(user.username, socket.id);
+    console.log(`[SERVER] 📹 ${user.username} joined video call in room: ${data.roomId} (total: ${callMap.size})`);
+
+    // Notify existing participants that a new user joined
+    callMap.forEach((sId, name) => {
+      if (name !== user.username) {
+        io.to(sId).emit('user-joined-video-call', {
+          username: user.username,
+          roomId: data.roomId
+        });
+      }
+    });
+
+    callback?.({ success: true, participants: existingParticipants });
+  });
+
+  socket.on('leave-video-call', (data) => {
+    const user = users.get(socket.id);
+    if (!user || !data?.roomId) return;
+
+    const callMap = roomCalls.get(data.roomId);
+    if (callMap) {
+      callMap.delete(user.username);
+      console.log(`[SERVER] 📹 ${user.username} left video call in room: ${data.roomId} (remaining: ${callMap.size})`);
+
+      callMap.forEach((sId) => {
+        io.to(sId).emit('user-left-video-call', {
+          username: user.username,
+          roomId: data.roomId
+        });
+      });
+
+      if (callMap.size === 0) {
+        roomCalls.delete(data.roomId);
+      }
+    }
+  });
+
   socket.on('call-user', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
 
     const targetSocketId = onlineUsers.get(data.to);
     if (targetSocketId) {
-      io.to(targetSocketId).emit('incoming-call', {
+      io.to(targetSocketId).emit('incoming-call-offer', {
         from: user.username,
         offer: data.offer
       });
@@ -313,9 +413,11 @@ io.on('connection', (socket) => {
   });
 
   socket.on('call-accepted', (data) => {
+    const user = users.get(socket.id);
     const targetSocketId = onlineUsers.get(data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('call-accepted', {
+        from: user?.username,
         answer: data.answer
       });
     }
@@ -330,21 +432,68 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('call-media-state', (data) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    if (data.to) {
+      const targetSocketId = onlineUsers.get(data.to);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-media-state', {
+          from: user.username,
+          audioEnabled: data.audioEnabled,
+          videoEnabled: data.videoEnabled
+        });
+      }
+    } else if (data.roomId && roomCalls.has(data.roomId)) {
+      roomCalls.get(data.roomId).forEach((sId, name) => {
+        if (name !== user.username) {
+          io.to(sId).emit('call-media-state', {
+            from: user.username,
+            audioEnabled: data.audioEnabled,
+            videoEnabled: data.videoEnabled
+          });
+        }
+      });
+    }
+  });
+
   socket.on('ice-candidate', (data) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
     const targetSocketId = onlineUsers.get(data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('ice-candidate', {
+        from: user.username,
         candidate: data.candidate
       });
     }
   });
 
   socket.on('end-call', (data) => {
-    const targetSocketId = onlineUsers.get(data.to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('call-ended', {
-        from: users.get(socket.id)?.username
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    if (data.to) {
+      const targetSocketId = onlineUsers.get(data.to);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-ended', {
+          from: user.username
+        });
+      }
+    }
+
+    if (data.roomId && roomCalls.has(data.roomId)) {
+      const callMap = roomCalls.get(data.roomId);
+      callMap.delete(user.username);
+      callMap.forEach((sId) => {
+        io.to(sId).emit('user-left-video-call', {
+          username: user.username,
+          roomId: data.roomId
+        });
       });
+      if (callMap.size === 0) roomCalls.delete(data.roomId);
     }
   });
 
@@ -374,6 +523,112 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('music-upload-track', async (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'User not registered' });
+      return;
+    }
+
+    if (user.currentRoom !== 'music-room') {
+      callback?.({ success: false, error: 'You must be in Music Room to upload tracks' });
+      return;
+    }
+
+    try {
+      if (!data?.fileName || !data?.mimeType || !data?.base64) {
+        callback?.({ success: false, error: 'Invalid upload payload' });
+        return;
+      }
+
+      const safeName = `${Date.now()}-${sanitizeFileName(data.fileName)}`;
+      const filePath = path.join(musicUploadDir, safeName);
+      const buffer = Buffer.from(data.base64, 'base64');
+      await fsp.writeFile(filePath, buffer);
+
+      const uploadedTrack = {
+        id: Date.now(),
+        title: data.title || path.parse(data.fileName).name,
+        artist: data.artist || user.username,
+        file: `/music/uploads/${safeName}`,
+        duration: data.duration || 'Uploaded',
+        cover: data.cover || '🎧'
+      };
+
+      musicPlaylist = [uploadedTrack, ...musicPlaylist];
+      io.emit('music-playlist-updated', { playlist: musicPlaylist, track: uploadedTrack });
+      callback?.({ success: true, track: uploadedTrack, playlist: musicPlaylist });
+    } catch (error) {
+      console.error('[SERVER] Failed to store uploaded track:', error);
+      callback?.({ success: false, error: 'Failed to upload track' });
+    }
+  });
+
+  // Add YouTube track to playlist (no file storage needed)
+  socket.on('music-add-youtube', (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'User not registered' });
+      return;
+    }
+
+    if (user.currentRoom !== 'music-room') {
+      callback?.({ success: false, error: 'You must be in Music Room to add tracks' });
+      return;
+    }
+
+    try {
+      if (!data?.file || !data?.title) {
+        callback?.({ success: false, error: 'Invalid YouTube track data' });
+        return;
+      }
+
+      const youtubeTrack = {
+        id: data.id || `youtube-${Date.now()}`,
+        title: data.title || 'YouTube Track',
+        artist: data.artist || user.username,
+        file: data.file,
+        type: 'youtube',
+        cover: data.cover || '▶️',
+        duration: data.duration || 'Live'
+      };
+
+      musicPlaylist = [youtubeTrack, ...musicPlaylist];
+      console.log(`[SERVER] ▶️ Added YouTube track: ${youtubeTrack.title} by ${youtubeTrack.artist}`);
+
+      io.emit('music-playlist-updated', { playlist: musicPlaylist, track: youtubeTrack });
+      callback?.({ success: true, track: youtubeTrack, playlist: musicPlaylist });
+    } catch (error) {
+      console.error('[SERVER] Failed to add YouTube track:', error);
+      callback?.({ success: false, error: 'Failed to add YouTube track' });
+    }
+  });
+
+  // Fetch YouTube metadata (title, duration)
+  socket.on('fetch-youtube-metadata', async (videoUrl, callback) => {
+    try {
+      const videoId = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([a-zA-Z0-9_-]{11})/)?.[1];
+      if (!videoId) {
+        callback?.({ success: false, error: 'Invalid YouTube URL' });
+        return;
+      }
+
+      // Try to fetch from YouTube oEmbed API
+      const oembed = await fetch(`https://www.youtube.com/oembed?url=https://youtube.com/watch?v=${videoId}&format=json`);
+      if (!oembed.ok) {
+        // Fallback: return empty metadata
+        callback?.({ success: true, title: `YouTube - ${videoId.substring(0, 8)}`, duration: 'Unknown' });
+        return;
+      }
+
+      const data = await oembed.json();
+      callback?.({ success: true, title: data.title || 'YouTube Video', duration: 'Check YouTube' });
+    } catch (error) {
+      console.error('[SERVER] Failed to fetch YouTube metadata:', error);
+      callback?.({ success: true, title: 'YouTube Video', duration: 'Unknown' });
+    }
+  });
+
   // --- Disconnect ---
   socket.on('disconnect', () => {
     const user = users.get(socket.id);
@@ -384,14 +639,29 @@ io.on('connection', (socket) => {
       if (user.currentRoom) {
         const room = rooms.get(user.currentRoom);
         if (room) {
-          room.members.delete(user.username);
+          setRoomPresence(user.currentRoom, user.username, false);
           socket.to(user.currentRoom).emit('user-left-room', {
             username: user.username,
             roomId: user.currentRoom,
+            active: false,
             timestamp: new Date().toISOString()
           });
         }
       }
+
+      // Clean up room video calls
+      roomCalls.forEach((callMap, roomId) => {
+        if (callMap.has(user.username)) {
+          callMap.delete(user.username);
+          callMap.forEach((sId) => {
+            io.to(sId).emit('user-left-video-call', {
+              username: user.username,
+              roomId
+            });
+          });
+          if (callMap.size === 0) roomCalls.delete(roomId);
+        }
+      });
 
       onlineUsers.delete(user.username);
       users.delete(socket.id);

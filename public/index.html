@@ -119,6 +119,7 @@
         <div id="chat-panel" class="panel">
           <div class="chat-header">
             <div class="chat-header-info">
+              <div id="active-chat-avatar" class="avatar-sm avatar-color-5"></div>
               <button id="back-btn" class="btn-icon mobile-only"><i class="fas fa-arrow-left"></i></button>
               <h2 id="room-name"></h2>
               <span id="room-members-count" class="badge"></span>
@@ -167,6 +168,12 @@
               <span id="music-room-members" class="badge"></span>
             </div>
             <div class="chat-header-actions">
+              <button id="music-upload-btn" class="btn-icon" title="Upload Audio">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button id="youtube-btn" class="btn-icon" title="Add YouTube">
+                <i class="fab fa-youtube"></i>
+              </button>
               <button id="leave-music-btn" class="btn-icon btn-danger" title="Leave Room">
                 <i class="fas fa-sign-out-alt"></i>
               </button>
@@ -174,39 +181,61 @@
           </div>
 
           <div class="music-layout">
-            <!-- Now Playing -->
+            <!-- Now Playing (audio-only) -->
             <div class="now-playing glass-card">
-              <div class="album-art" id="album-art">
-                <div class="album-art-placeholder">
-                  <i class="fas fa-music"></i>
+              <div class="now-playing-inner">
+                <div class="album-art" id="album-art">
+                  <div class="album-art-placeholder">
+                    <i class="fas fa-music"></i>
+                  </div>
+                  <div class="vinyl-spin" id="vinyl-spin"></div>
                 </div>
-                <div class="vinyl-spin" id="vinyl-spin"></div>
-              </div>
-              <div class="track-info">
-                <h3 id="track-title">Select a song</h3>
-                <p id="track-artist">From the playlist below</p>
-              </div>
-              <div class="progress-bar-container">
-                <span id="current-time">0:00</span>
-                <div class="progress-bar" id="progress-bar">
-                  <div class="progress-fill" id="progress-fill"></div>
+                <div class="player-main">
+                  <div class="now-playing-label"><i class="fas fa-headphones"></i> Now Playing</div>
+                  <div class="track-info">
+                    <h3 id="track-title">Select a song</h3>
+                    <p id="track-artist">Choose a track from the playlist below</p>
+                  </div>
+                  <span class="track-source-badge" id="track-source"></span>
+                  <div class="progress-bar-container">
+                    <span id="current-time">0:00</span>
+                    <div class="progress-bar" id="progress-bar">
+                      <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <span id="total-time">0:00</span>
+                  </div>
+                  <div class="player-controls-row">
+                    <div class="player-controls">
+                      <button id="prev-btn" class="btn-control" title="Previous"><i class="fas fa-backward"></i></button>
+                      <button id="play-btn" class="btn-control btn-play" title="Play"><i class="fas fa-play"></i></button>
+                      <button id="next-btn" class="btn-control" title="Next"><i class="fas fa-forward"></i></button>
+                    </div>
+                    <div class="volume-control">
+                      <i class="fas fa-volume-up" id="volume-icon"></i>
+                      <input type="range" id="volume-slider" min="0" max="100" value="70">
+                    </div>
+                  </div>
                 </div>
-                <span id="total-time">0:00</span>
               </div>
-              <div class="player-controls">
-                <button id="prev-btn" class="btn-control"><i class="fas fa-backward"></i></button>
-                <button id="play-btn" class="btn-control btn-play"><i class="fas fa-play"></i></button>
-                <button id="next-btn" class="btn-control"><i class="fas fa-forward"></i></button>
-              </div>
-              <div class="volume-control">
-                <i class="fas fa-volume-up"></i>
-                <input type="range" id="volume-slider" min="0" max="100" value="70">
+              <!-- Hidden YouTube player — audio only, no video UI -->
+              <div id="youtube-player-container" class="youtube-audio-only" aria-hidden="true">
+                <div id="youtube-player"></div>
               </div>
             </div>
 
             <!-- Playlist -->
             <div class="playlist glass-card">
-              <h3><i class="fas fa-list"></i> Playlist</h3>
+              <div class="playlist-header">
+                <h3><i class="fas fa-list"></i> Playlist</h3>
+                <span class="playlist-hint">Upload audio or add YouTube links</span>
+              </div>
+              <div class="youtube-input-wrapper" id="youtube-input-wrapper" style="display: none; padding: 12px; border-bottom: 1px solid var(--bg-border);">
+                <input type="url" id="youtube-url-input" placeholder="Paste YouTube URL (youtube.com/watch?v=...)" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--bg-border); background: var(--bg-input); color: var(--text-primary); font-size: 12px; margin-bottom: 8px;">
+                <div style="display: flex; gap: 8px;">
+                  <button id="youtube-add-btn" class="btn-control" style="flex: 1; padding: 8px; background: var(--accent-primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">Add from YouTube</button>
+                  <button id="youtube-cancel-btn" class="btn-control" style="flex: 0.5; padding: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--bg-border); border-radius: 6px; cursor: pointer; font-size: 12px;">Cancel</button>
+                </div>
+              </div>
               <div id="playlist-items" class="playlist-items"></div>
             </div>
 
@@ -255,21 +284,30 @@
 
   <!-- ==================== VIDEO CALL OVERLAY ==================== -->
   <div id="video-overlay" class="video-overlay">
-    <div class="video-container">
-      <div class="video-grid">
-        <div class="video-box">
-          <video id="remote-video" autoplay playsinline></video>
-          <span class="video-label" id="remote-label">Remote</span>
+    <div class="video-container" id="video-container">
+      <div class="video-header" id="video-header">
+        <div class="video-header-info">
+          <i class="fas fa-video call-pulse-icon"></i>
+          <span id="call-title-text">Video Call</span>
+          <span id="call-participant-count" class="badge">1 participant</span>
         </div>
-        <div class="video-box video-self">
-          <video id="local-video" autoplay playsinline muted></video>
-          <span class="video-label">You</span>
+        <div class="video-header-actions">
+          <button id="minimize-call-btn" class="btn-icon-sm" title="Minimize to Chat / ย่อจอ">
+            <i class="fas fa-minus"></i>
+          </button>
+          <button id="maximize-call-btn" class="btn-icon-sm" title="Expand / ขยายจอ" style="display: none;">
+            <i class="fas fa-expand-alt"></i>
+          </button>
         </div>
       </div>
+      <div class="video-grid" id="video-grid">
+        <!-- Dynamic video tiles rendered by JavaScript -->
+      </div>
       <div class="video-controls">
-        <button id="toggle-mic-btn" class="btn-video"><i class="fas fa-microphone"></i></button>
-        <button id="toggle-cam-btn" class="btn-video"><i class="fas fa-video"></i></button>
-        <button id="end-call-btn" class="btn-video btn-end-call"><i class="fas fa-phone-slash"></i></button>
+        <button id="toggle-mic-btn" class="btn-video" title="Mute/Unmute Mic"><i class="fas fa-microphone"></i></button>
+        <button id="toggle-cam-btn" class="btn-video" title="Camera On/Off"><i class="fas fa-video"></i></button>
+        <button id="toggle-pip-btn" class="btn-video" title="Toggle Floating Window / ย่อจอ"><i class="fas fa-compress-alt"></i></button>
+        <button id="end-call-btn" class="btn-video btn-end-call" title="End Call"><i class="fas fa-phone-slash"></i></button>
       </div>
     </div>
   </div>
@@ -308,6 +346,7 @@
   <div id="toast-container" class="toast-container"></div>
 
   <audio id="music-player" preload="auto"></audio>
+  <input id="music-upload-input" type="file" accept="audio/*" hidden>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js"></script>
