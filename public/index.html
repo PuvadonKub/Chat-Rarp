@@ -61,6 +61,9 @@
             <i class="fas fa-comments"></i>
             <span>ChatVerse</span>
           </div>
+          <button id="collapse-sidebar-btn" class="btn-icon desktop-only" title="Toggle Sidebar">
+            <i class="fas fa-chevron-left"></i>
+          </button>
           <div class="user-badge">
             <div class="avatar-sm" id="my-avatar"></div>
             <span id="my-username"></span>
@@ -154,9 +157,53 @@
           <div class="chat-input-area">
             <div class="typing-indicator" id="typing-indicator"></div>
             <div id="chat-attachment-preview" class="attachment-preview-bar"></div>
+
+            <!-- Emoji Picker Popover -->
+            <div id="emoji-picker-popover" class="picker-popover hidden">
+              <div class="picker-header">
+                <span><i class="far fa-smile"></i> Choose Emoji</span>
+                <button id="close-emoji-picker" class="btn-icon-xs"><i class="fas fa-times"></i></button>
+              </div>
+              <div class="emoji-categories">
+                <button class="emoji-tab active" data-category="smileys">😀</button>
+                <button class="emoji-tab" data-category="gestures">👍</button>
+                <button class="emoji-tab" data-category="hearts">❤️</button>
+                <button class="emoji-tab" data-category="objects">🎉</button>
+                <button class="emoji-tab" data-category="animals">🐶</button>
+              </div>
+              <div id="emoji-grid" class="emoji-grid"></div>
+            </div>
+
+            <!-- GIF Picker Popover -->
+            <div id="gif-picker-popover" class="picker-popover hidden">
+              <div class="picker-header">
+                <span><i class="fas fa-film"></i> Choose GIF</span>
+                <button id="close-gif-picker" class="btn-icon-xs"><i class="fas fa-times"></i></button>
+              </div>
+              <div class="gif-search-wrapper">
+                <i class="fas fa-search"></i>
+                <input type="text" id="gif-search-input" placeholder="Search GIFs..." autocomplete="off">
+              </div>
+              <div class="gif-categories">
+                <span class="gif-tag active" data-tag="trending">🔥 Trending</span>
+                <span class="gif-tag" data-tag="happy">😀 Happy</span>
+                <span class="gif-tag" data-tag="dance">💃 Dance</span>
+                <span class="gif-tag" data-tag="lol">😂 LOL</span>
+                <span class="gif-tag" data-tag="love">😍 Love</span>
+                <span class="gif-tag" data-tag="fire">🔥 Fire</span>
+              </div>
+              <div id="gif-grid" class="gif-grid"></div>
+            </div>
+
             <div class="chat-input-wrapper">
               <button id="attach-btn" class="btn-attach" title="Attach image, video or file">
                 <i class="fas fa-paperclip"></i>
+              </button>
+              <button id="emoji-btn" class="btn-attach" title="Choose Emoji">
+                <i class="far fa-smile"></i>
+              </button>
+              <button id="gif-btn" class="btn-attach" title="Search & Send GIF">
+                <i class="fas fa-film"></i>
               </button>
               <input type="file" id="chat-file-input" hidden multiple>
               <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
@@ -255,6 +302,12 @@
               <div class="chat-input-wrapper">
                 <button id="music-attach-btn" class="btn-attach" title="Attach file">
                   <i class="fas fa-paperclip"></i>
+                </button>
+                <button id="music-emoji-btn" class="btn-attach" title="Choose Emoji">
+                  <i class="far fa-smile"></i>
+                </button>
+                <button id="music-gif-btn" class="btn-attach" title="Search & Send GIF">
+                  <i class="fas fa-film"></i>
                 </button>
                 <input type="file" id="music-file-input" hidden multiple>
                 <input type="text" id="music-chat-input" placeholder="Type a message..." autocomplete="off">

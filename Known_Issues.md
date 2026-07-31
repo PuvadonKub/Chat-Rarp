@@ -52,6 +52,10 @@
 | **ห้องแชท** | Room Message Counter | ✅ แก้แล้ว | แสดงตัวนับจำนวนข้อความที่ส่งในแต่ละห้องแชทแบบ Real-time |
 | **แก้ไขบั๊ก CSS** | Syntax Error (`at-rule or selector expected`) | ✅ แก้แล้ว | ลบเศษโค้ด `right: 4px; }`, วงเล็บปีกกาปิดส่วนเกิน และ Selector ซ้ำซ้อนใน `public/style.css` (L1728-1786) |
 | **โครงสร้างโค้ด** | Code Refactor & Optimization | ✅ เสร็จแล้ว | Refactor โค้ดฝั่ง Server (`server.js`) จัดกลุ่ม Helper & Socket Event Controllers ปรับปรุงความเสถียรและความสะอาดของโค้ด |
+| **เวลาข้อความ** | Visible Message Timestamp | ✅ แก้แล้ว | แสดงวันเวลาส่งข้อความในกล่องแชทอย่างชัดเจนพร้อม Tooltip |
+| **สื่อแชท** | Emoji & GIF Pickers | ✅ แก้แล้ว | เพิ่มปุ่มเลือก Emoji และค้นหา GIF อนิเมชันส่งเข้าแชทได้อย่างรวดเร็ว |
+| **การแจ้งเตือนคอล** | Video Call Ringtone & Notification | ✅ แก้แล้ว | ระบบส่งเสียงเรียกเข้า Ringtone + ป๊อปอัปแจ้งเตือนสายคอลส่วนตัวและคอลกลุ่ม |
+| **ปรับแต่ง UI/UX** | Responsive Chat & Collapsible Sidebar | ✅ แก้แล้ว | แก้ไขข้อความขึ้นบรรทัดใหม่โดยไม่จำเป็น, ทำให้กล่องแชทเลื่อนด้วยเมาส์, ตัดคำว่า total ออก, ปุ่ม View Members ใช้งานได้จริง และเพิ่มปุ่มพับเก็บ Sidebar ฝั่งซ้าย |
 
 ---
 

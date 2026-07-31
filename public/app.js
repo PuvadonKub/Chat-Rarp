@@ -210,7 +210,7 @@ function getMemberActive(member) {
 function formatMemberSummary(members) {
     const normalized = normalizeMembers(members);
     const activeCount = normalized.filter(member => member.active).length;
-    return `${activeCount} active / ${normalized.length} total`;
+    return `${activeCount} active`;
 }
 
 function setActiveChatAvatar(label, avatarClass = '') {
@@ -275,7 +275,7 @@ function renderRoomList(rooms) {
       </div>
       <div class="room-info">
         <div class="room-title">${escapeHtml(room.name)}</div>
-        <div class="room-meta">${room.activeMemberCount || 0} active / ${room.memberCount || 0} total</div>
+        <div class="room-meta">${room.activeMemberCount || 0} active</div>
       </div>
       ${unreadCount > 0 ? `<span class="unread-pill">${unreadCount}</span>` : ''}
     `;
@@ -349,8 +349,8 @@ function doLogin() {
 
 // ==================== ROOM LIST ====================
 socket.on('room-list', (rooms) => {
-        roomListCache = rooms || [];
-        renderRoomList(roomListCache);
+    roomListCache = rooms || [];
+    renderRoomList(roomListCache);
 });
 
 // ==================== ONLINE USERS ====================
@@ -585,6 +585,13 @@ socket.on('room-deleted', (data) => {
     }
 });
 
+socket.on('music-playlist-updated', (data) => {
+    if (data?.playlist) {
+        playlist = data.playlist;
+        renderPlaylist();
+    }
+});
+
 socket.on('room-message', (msg) => {
     const targetRoomId = msg.roomId || currentRoom?.id;
     const isCurrentActiveRoom = currentChat && currentChat.type === 'room' && currentChat.id === targetRoomId;
@@ -804,16 +811,20 @@ function appendMessageUI(msg) {
 
     const isSent = msg.from === currentUser?.username;
     const row = document.createElement('div');
-    row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
+    row.className = `ms-msg-row message ${isSent ? 'sent' : 'received'}`;
 
-    const textHtml = msg.text ? `<div>${escapeHtml(msg.text)}</div>` : '';
+    const cleanText = msg.text ? String(msg.text).trim() : '';
+    const textHtml = cleanText ? `<span class="msg-text">${escapeHtml(cleanText)}</span>` : '';
     const attachmentHtml = renderAttachmentHTML(msg.attachment);
+    const timeFormatted = formatTime(msg.timestamp || new Date().toISOString());
+    const fullDateTime = formatDateTime(msg.timestamp || new Date().toISOString());
 
     row.innerHTML = `
         ${!isSent ? `<div class="avatar-sm ${getAvatarColor(msg.from)}" style="width:28px;height:28px;font-size:12px;margin-right:8px;align-self:flex-end;">${getInitials(msg.from)}</div>` : ''}
-        <div class="ms-msg-bubble" title="${formatTime(msg.timestamp)}">
-            ${textHtml}
-            ${attachmentHtml}
+        <div class="ms-msg-bubble-container" style="max-width:75%;">
+            ${!isSent ? `<div class="msg-sender">${escapeHtml(msg.from)}</div>` : ''}
+            <div class="ms-msg-bubble msg-bubble" title="${fullDateTime}">${textHtml}${attachmentHtml}</div>
+            <div class="msg-meta"><span class="msg-time" title="${fullDateTime}">${timeFormatted}</span></div>
         </div>
     `;
     chatMessages.appendChild(row);
@@ -824,7 +835,7 @@ sendBtn.addEventListener('click', sendMessage);
 chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
 function sendMessage() {
-    const text = chatInput ? chatInput.value : '';
+    const text = chatInput ? chatInput.value.trim() : '';
     uploadAndSend(text, pendingChatFiles, 'chat');
 }
 
@@ -988,7 +999,7 @@ setupDragAndDrop(dmMessages, 'chat');
 if (musicSendBtn) musicSendBtn.addEventListener('click', sendMusicChat);
 if (musicChatInput) musicChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMusicChat(); });
 function sendMusicChat() {
-    const text = musicChatInput ? musicChatInput.value : '';
+    const text = musicChatInput ? musicChatInput.value.trim() : '';
     uploadAndSend(text, pendingMusicFiles, 'music');
 }
 function renderMusicChat(messages) { musicChatMessages.innerHTML = ''; messages.forEach(msg => appendMusicChatMessage(msg)); }
@@ -1001,10 +1012,19 @@ function appendMusicChatMessage(msg) {
     } else {
         const isSent = msg.from === currentUser?.username;
         const row = document.createElement('div');
-        row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
-        const textHtml = msg.text ? `<div>${escapeHtml(msg.text)}</div>` : '';
+        row.className = `ms-msg-row message ${isSent ? 'sent' : 'received'}`;
+        const cleanText = msg.text ? String(msg.text).trim() : '';
+        const textHtml = cleanText ? `<span class="msg-text">${escapeHtml(cleanText)}</span>` : '';
         const attachmentHtml = renderAttachmentHTML(msg.attachment);
-        row.innerHTML = `<div class="ms-msg-bubble">${textHtml}${attachmentHtml}</div>`;
+        const timeFormatted = formatTime(msg.timestamp || new Date().toISOString());
+        const fullDateTime = formatDateTime(msg.timestamp || new Date().toISOString());
+        row.innerHTML = `
+            <div class="ms-msg-bubble-container" style="max-width:75%;">
+                ${!isSent ? `<div class="msg-sender">${escapeHtml(msg.from)}</div>` : ''}
+                <div class="ms-msg-bubble msg-bubble" title="${fullDateTime}">${textHtml}${attachmentHtml}</div>
+                <div class="msg-meta"><span class="msg-time" title="${fullDateTime}">${timeFormatted}</span></div>
+            </div>
+        `;
         musicChatMessages.appendChild(row);
     }
     musicChatMessages.scrollTop = musicChatMessages.scrollHeight;
@@ -1091,12 +1111,12 @@ if (youtubeAddBtn) {
         }
 
         showToast('Fetching video info...', 'info');
-        
+
         // Fetch metadata from server
         socket.emit('fetch-youtube-metadata', url, (res) => {
             const title = res?.title || `YouTube Video - ${videoId.substring(0, 8)}`;
             const duration = res?.duration || 'Unknown';
-            
+
             const newTrack = {
                 id: `youtube-${Date.now()}`,
                 title: title,
@@ -1404,6 +1424,45 @@ function createPeerConnection(targetUsername, isInitiator) {
     return pc;
 }
 
+// ==================== CALL RINGTONE & NOTIFICATIONS ====================
+let ringtoneAudioCtx = null;
+let ringtoneTimer = null;
+
+function startRingtone() {
+    stopRingtone();
+    try {
+        ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let step = 0;
+        ringtoneTimer = setInterval(() => {
+            if (!ringtoneAudioCtx || ringtoneAudioCtx.state === 'closed') return;
+            const osc = ringtoneAudioCtx.createOscillator();
+            const gain = ringtoneAudioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(step % 2 === 0 ? 440 : 554.37, ringtoneAudioCtx.currentTime);
+            gain.gain.setValueAtTime(0.12, ringtoneAudioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ringtoneAudioCtx.currentTime + 0.35);
+            osc.connect(gain);
+            gain.connect(ringtoneAudioCtx.destination);
+            osc.start();
+            osc.stop(ringtoneAudioCtx.currentTime + 0.35);
+            step++;
+        }, 450);
+    } catch (e) {
+        console.log('Ringtone sound init error:', e);
+    }
+}
+
+function stopRingtone() {
+    if (ringtoneTimer) {
+        clearInterval(ringtoneTimer);
+        ringtoneTimer = null;
+    }
+    if (ringtoneAudioCtx) {
+        try { ringtoneAudioCtx.close(); } catch (e) { }
+        ringtoneAudioCtx = null;
+    }
+}
+
 // --- WebRTC Signaling Socket Listeners ---
 socket.on('user-joined-video-call', (data) => {
     if (activeCallRoomId && data.roomId === activeCallRoomId) {
@@ -1415,11 +1474,14 @@ socket.on('user-joined-video-call', (data) => {
 socket.on('incoming-call-offer', async (data) => {
     if (!activeCallRoomId && peerConnections.size === 0) {
         callTarget = data.from;
-        if (callerName) callerName.textContent = `${data.from} is calling you...`;
+        startRingtone();
+        showToast(`📞 Incoming Video Call from ${escapeHtml(data.from)}!`, 'warning');
+        if (callerName) callerName.textContent = `📞 ${data.from} is calling you...`;
         if (incomingCallModal) incomingCallModal.classList.add('active');
 
         if (acceptCallBtn) {
             acceptCallBtn.onclick = async () => {
+                stopRingtone();
                 if (incomingCallModal) incomingCallModal.classList.remove('active');
                 try {
                     activeCallTargetDM = data.from;
@@ -1441,6 +1503,7 @@ socket.on('incoming-call-offer', async (data) => {
 
         if (rejectCallBtn) {
             rejectCallBtn.onclick = () => {
+                stopRingtone();
                 if (incomingCallModal) incomingCallModal.classList.remove('active');
                 socket.emit('call-rejected', { to: data.from });
             };
@@ -1454,6 +1517,31 @@ socket.on('incoming-call-offer', async (data) => {
             socket.emit('call-accepted', { to: data.from, answer });
         } catch (err) {
             console.error('Error answering room peer offer:', err);
+        }
+    }
+});
+
+socket.on('incoming-room-video-call', (data) => {
+    if (!activeCallRoomId && peerConnections.size === 0) {
+        startRingtone();
+        showToast(`📹 Incoming Group Call in ${escapeHtml(data.roomName)} from ${escapeHtml(data.from)}!`, 'warning');
+        if (callerName) callerName.textContent = `📹 ${data.from} started a video call in ${data.roomName}`;
+        if (incomingCallModal) incomingCallModal.classList.add('active');
+
+        if (acceptCallBtn) {
+            acceptCallBtn.onclick = async () => {
+                stopRingtone();
+                if (incomingCallModal) incomingCallModal.classList.remove('active');
+                joinRoom(data.roomId);
+                startOrJoinRoomCall(data.roomId, data.roomName);
+            };
+        }
+
+        if (rejectCallBtn) {
+            rejectCallBtn.onclick = () => {
+                stopRingtone();
+                if (incomingCallModal) incomingCallModal.classList.remove('active');
+            };
         }
     }
 });
@@ -1793,14 +1881,37 @@ function renderPlaylist() {
         <div class="track-by">${escapeHtml(track.artist)}</div>
       </div>
       <div class="track-dur">${track.duration}</div>
+      <button class="btn-remove-track" title="Remove track" onclick="event.stopPropagation();removeTrack('${escapeHtml(track.id)}')"><i class="fas fa-trash-alt"></i></button>
     `;
         div.addEventListener('click', () => {
             loadTrack(i, 0);
-            const track = playlist[i];
-            if (track.type !== 'youtube') playCurrentTrack();
+            const t = playlist[i];
+            if (t.type !== 'youtube') playCurrentTrack();
             socket.emit('music-control', { action: 'play', trackId: i, currentTime: 0 });
         });
         playlistItems.appendChild(div);
+    });
+}
+
+function removeTrack(trackId) {
+    socket.emit('music-remove-track', { trackId }, (res) => {
+        if (res?.success) {
+            playlist = res.playlist;
+            // If removed track was currently playing, stop and reset
+            const removedWasPlaying = playlist.findIndex(t => t.id === trackId) === -1 && currentTrackIndex >= playlist.length;
+            if (removedWasPlaying) {
+                currentTrackIndex = -1;
+                if (musicPlayer) { musicPlayer.pause(); musicPlayer.src = ''; }
+                stopYouTubePlayer();
+                setPlayingUI(false);
+            } else if (currentTrackIndex >= playlist.length) {
+                currentTrackIndex = playlist.length - 1;
+            }
+            renderPlaylist();
+            showToast('Track removed', 'info');
+        } else {
+            showToast(res?.error || 'Failed to remove track', 'error');
+        }
     });
 }
 
@@ -1996,3 +2107,271 @@ openDM = function (username) {
     closeSidebar();
     originalOpenDM(username);
 };
+
+// Desktop Sidebar Collapse Toggle
+const collapseSidebarBtn = $('collapse-sidebar-btn');
+if (collapseSidebarBtn) {
+    collapseSidebarBtn.addEventListener('click', () => {
+        if (sidebarEl) {
+            sidebarEl.classList.toggle('collapsed');
+            const isCollapsed = sidebarEl.classList.contains('collapsed');
+            collapseSidebarBtn.innerHTML = `<i class="fas fa-chevron-${isCollapsed ? 'right' : 'left'}"></i>`;
+            collapseSidebarBtn.title = isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
+        }
+    });
+}
+
+// Room Members Sidebar & View Members Button
+function updateMembersList(members) {
+    if (!membersList) return;
+    membersList.innerHTML = '';
+    const normalized = normalizeMembers(members);
+    normalized.forEach(m => {
+        const item = document.createElement('div');
+        item.className = `member-item ${m.active ? 'active' : 'inactive'}`;
+        item.innerHTML = `
+            <div class="avatar-sm ${getAvatarColor(m.username)}" style="width:28px;height:28px;font-size:12px;">${getInitials(m.username)}</div>
+            <span class="member-name" style="font-weight:600;font-size:13px;">${escapeHtml(m.username)}</span>
+            <span class="member-state ${m.active ? 'active' : 'inactive'}">${m.active ? 'Active' : 'Offline'}</span>
+        `;
+        membersList.appendChild(item);
+    });
+}
+
+if (roomMembersBtn) {
+    roomMembersBtn.addEventListener('click', () => {
+        if (membersSidebar) {
+            membersSidebar.classList.toggle('active');
+            if (currentChat && currentChat.type === 'room' && currentChat.data?.members) {
+                updateMembersList(currentChat.data.members);
+            }
+        }
+    });
+}
+
+if (closeMembersBtn) {
+    closeMembersBtn.addEventListener('click', () => {
+        if (membersSidebar) membersSidebar.classList.remove('active');
+    });
+}
+
+// ==================== EMOJI & GIF PICKERS ====================
+const emojiBtn = $('emoji-btn');
+const musicEmojiBtn = $('music-emoji-btn');
+const emojiPickerPopover = $('emoji-picker-popover');
+const closeEmojiPicker = $('close-emoji-picker');
+const emojiGrid = $('emoji-grid');
+const emojiTabs = document.querySelectorAll('.emoji-tab');
+
+const gifBtn = $('gif-btn');
+const musicGifBtn = $('music-gif-btn');
+const gifPickerPopover = $('gif-picker-popover');
+const closeGifPicker = $('close-gif-picker');
+const gifGrid = $('gif-grid');
+const gifSearchInput = $('gif-search-input');
+const gifTags = document.querySelectorAll('.gif-tag');
+
+let activeInputTarget = chatInput;
+
+const emojiData = {
+    smileys: ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🤩', '🥳', '😏', '😒', '😞', '😟', '😕', '🙁', '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷'],
+    gestures: ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '🖐️', '✋', '🖖', '👋', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '<ctrl42>', '💪', '🦾', '👂', '👃', '🧠', '👀', '👁️', '舌', '👄'],
+    hearts: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '<ctrl42>', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓'],
+    objects: ['🎉', '🎊', '🎈', '🎂', '🎁', '🎗️', '🎟️', '🎫', '🎖️', '🏆', '🥇', '🥈', '🥉', '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛷'],
+    animals: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐽', '🐸', '🐵', '🙈', '🙉', '🙊', '🐒', '🐔', '🐧', '🐦', '🐤', '🐣', '🐥', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋', '🐌', '🐞', '🐜']
+};
+
+const gifData = {
+    trending: [
+        { url: 'https://media.giphy.com/media/l0HlHFRbmaZtBRhXG/giphy.gif', title: 'Happy Dance' },
+        { url: 'https://media.giphy.com/media/3o7TKsjN42gScbefsY/giphy.gif', title: 'Thumbs Up' },
+        { url: 'https://media.giphy.com/media/26n6WywJyh39n1pBu/giphy.gif', title: 'Clapping' },
+        { url: 'https://media.giphy.com/media/l3fQf1OEAq0iri9RC/giphy.gif', title: 'Party Cat' },
+        { url: 'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif', title: 'Cheers' },
+        { url: 'https://media.giphy.com/media/xT0xezQGU5xCDJuCPe/giphy.gif', title: 'Mind Blown' }
+    ],
+    happy: [
+        { url: 'https://media.giphy.com/media/l0HlHFRbmaZtBRhXG/giphy.gif', title: 'Happy Dance' },
+        { url: 'https://media.giphy.com/media/13m24iFmhomZi0/giphy.gif', title: 'Excited' },
+        { url: 'https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif', title: 'Woohoo' }
+    ],
+    dance: [
+        { url: 'https://media.giphy.com/media/l3vRlT2k2L35Cbo52/giphy.gif', title: 'Disco Dance' },
+        { url: 'https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif', title: 'Groove Dance' }
+    ],
+    lol: [
+        { url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif', title: 'LOL Laugh' },
+        { url: 'https://media.giphy.com/media/bC9czlgCM8gJA8abfZ/giphy.gif', title: 'Hahaha' }
+    ],
+    love: [
+        { url: 'https://media.giphy.com/media/26hpKMTa5Hg1XUA12/giphy.gif', title: 'Heart Eyes' },
+        { url: 'https://media.giphy.com/media/l4pTdcifPZLpDjL1e/giphy.gif', title: 'Sending Love' }
+    ],
+    fire: [
+        { url: 'https://media.giphy.com/media/nrXif4Ytz4hxe/giphy.gif', title: 'On Fire' },
+        { url: 'https://media.giphy.com/media/l0IXYWD715lzUK3le/giphy.gif', title: 'Fire Lit' }
+    ]
+};
+
+function renderEmojiCategory(cat = 'smileys') {
+    if (!emojiGrid) return;
+    emojiGrid.innerHTML = '';
+    const list = emojiData[cat] || emojiData.smileys;
+    list.forEach(emoji => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'emoji-btn-item';
+        btn.textContent = emoji;
+        btn.addEventListener('click', () => {
+            if (activeInputTarget) {
+                activeInputTarget.value += emoji;
+                activeInputTarget.focus();
+            }
+        });
+        emojiGrid.appendChild(btn);
+    });
+}
+
+function renderGifs(category = 'trending', query = '') {
+    if (!gifGrid) return;
+    gifGrid.innerHTML = '';
+    let list = gifData[category] || gifData.trending;
+    if (query) {
+        const q = query.toLowerCase();
+        list = list.filter(g => g.title.toLowerCase().includes(q) || category.includes(q));
+        if (list.length === 0) {
+            list = [{ url: 'https://media.giphy.com/media/3o7TKsjN42gScbefsY/giphy.gif', title: query }];
+        }
+    }
+
+    list.forEach(gif => {
+        const img = document.createElement('img');
+        img.src = gif.url;
+        img.alt = gif.title;
+        img.className = 'gif-item';
+        img.loading = 'lazy';
+        img.addEventListener('click', () => {
+            const gifAttachment = {
+                url: gif.url,
+                fileName: `${gif.title}.gif`,
+                mimeType: 'image/gif',
+                fileSize: 0,
+                mediaType: 'image'
+            };
+
+            if (currentChat) {
+                const msgObj = {
+                    id: Date.now().toString(),
+                    from: currentUser?.username || 'me',
+                    to: currentChat.type === 'dm' ? currentDMUser : undefined,
+                    roomId: currentChat.type === 'room' ? currentChat.id : undefined,
+                    text: '',
+                    attachment: gifAttachment,
+                    timestamp: new Date().toISOString()
+                };
+
+                if (currentChat.type === 'dm') {
+                    socket.emit('private-message', { to: currentDMUser, text: '', attachment: gifAttachment });
+                } else if (currentChat.type === 'room') {
+                    socket.emit('room-message', { text: '', attachment: gifAttachment });
+                }
+
+                if (currentChat.data?.type === 'music') {
+                    appendMusicChatMessage(msgObj);
+                } else {
+                    appendMessageUI(msgObj);
+                }
+            }
+            if (gifPickerPopover) gifPickerPopover.classList.add('hidden');
+        });
+        gifGrid.appendChild(img);
+    });
+}
+
+// Emoji button events
+if (emojiBtn) {
+    emojiBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        activeInputTarget = chatInput;
+        if (gifPickerPopover) gifPickerPopover.classList.add('hidden');
+        if (emojiPickerPopover) {
+            emojiPickerPopover.classList.toggle('hidden');
+            if (!emojiPickerPopover.classList.contains('hidden')) renderEmojiCategory('smileys');
+        }
+    });
+}
+if (musicEmojiBtn) {
+    musicEmojiBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        activeInputTarget = musicChatInput;
+        if (gifPickerPopover) gifPickerPopover.classList.add('hidden');
+        if (emojiPickerPopover) {
+            emojiPickerPopover.classList.toggle('hidden');
+            if (!emojiPickerPopover.classList.contains('hidden')) renderEmojiCategory('smileys');
+        }
+    });
+}
+if (closeEmojiPicker) {
+    closeEmojiPicker.addEventListener('click', () => {
+        if (emojiPickerPopover) emojiPickerPopover.classList.add('hidden');
+    });
+}
+emojiTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        emojiTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        renderEmojiCategory(tab.dataset.category);
+    });
+});
+
+// GIF button events
+if (gifBtn) {
+    gifBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        activeInputTarget = chatInput;
+        if (emojiPickerPopover) emojiPickerPopover.classList.add('hidden');
+        if (gifPickerPopover) {
+            gifPickerPopover.classList.toggle('hidden');
+            if (!gifPickerPopover.classList.contains('hidden')) renderGifs('trending');
+        }
+    });
+}
+if (musicGifBtn) {
+    musicGifBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        activeInputTarget = musicChatInput;
+        if (emojiPickerPopover) emojiPickerPopover.classList.add('hidden');
+        if (gifPickerPopover) {
+            gifPickerPopover.classList.toggle('hidden');
+            if (!gifPickerPopover.classList.contains('hidden')) renderGifs('trending');
+        }
+    });
+}
+if (closeGifPicker) {
+    closeGifPicker.addEventListener('click', () => {
+        if (gifPickerPopover) gifPickerPopover.classList.add('hidden');
+    });
+}
+gifTags.forEach(tag => {
+    tag.addEventListener('click', () => {
+        gifTags.forEach(t => t.classList.remove('active'));
+        tag.classList.add('active');
+        renderGifs(tag.dataset.tag, gifSearchInput ? gifSearchInput.value : '');
+    });
+});
+if (gifSearchInput) {
+    gifSearchInput.addEventListener('input', () => {
+        const activeTag = document.querySelector('.gif-tag.active')?.dataset?.tag || 'trending';
+        renderGifs(activeTag, gifSearchInput.value);
+    });
+}
+
+// Close pickers on outside click
+document.addEventListener('click', (e) => {
+    if (emojiPickerPopover && !emojiPickerPopover.contains(e.target) && e.target !== emojiBtn && e.target !== musicEmojiBtn) {
+        emojiPickerPopover.classList.add('hidden');
+    }
+    if (gifPickerPopover && !gifPickerPopover.contains(e.target) && e.target !== gifBtn && e.target !== musicGifBtn) {
+        gifPickerPopover.classList.add('hidden');
+    }
+});

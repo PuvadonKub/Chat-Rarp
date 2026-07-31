@@ -31,7 +31,53 @@ const users = new Map();        // socketId -> { id, username, socketId, current
 const privateChats = new Map(); // chatKey -> [{ id, from, to, text, attachment, timestamp, read }]
 const onlineUsers = new Map();  // username -> socketId
 const roomCalls = new Map();    // roomId -> Map<username, socketId>
-let musicPlaylist = [];         // Array of music track objects
+let musicPlaylist = [
+  {
+    id: 'yt-default-1',
+    title: 'ผลิบานทั้งใจ - Kae Wanthakan [Original by Bewmeelue]',
+    artist: 'Kae Wanthakan [Original by Bewmeelue]',
+    file: 'https://youtu.be/sT9fIqV6f3I?si=rLgSTmakkuwXz_yR',
+    type: 'youtube',
+    cover: '🌺',
+    duration: '3:52'
+  },
+  {
+    id: 'yt-default-2',
+    title: 'เพลง โอ้ละน้อ',
+    artist: 'ก้อง ห้วยไร่',
+    file: 'https://youtu.be/5fRX5JnlxkI?si=G9CLW6wYKHWQutzi',
+    type: 'youtube',
+    cover: '🤘',
+    duration: '5:22'
+  },
+  {
+    id: 'yt-default-3',
+    title: 'กระแซะเข้ามาซิ - อัน ละน้อ [Cover Live Session เพลงเก่าที่คิดถึง ]',
+    artist: 'อัน ละน้อ',
+    file: 'https://youtu.be/HkwVRRmV3V8?si=qVf8v5G5FpVqIKGF',
+    type: 'youtube',
+    cover: '🤘',
+    duration: '3:18'
+  },
+  {
+    id: 'yt-default-4',
+    title: 'Shape of You',
+    artist: 'Ed Sheeran',
+    file: 'https://www.youtube.com/watch?v=JGwWNGJdvx8',
+    type: 'youtube',
+    cover: '🎸',
+    duration: '3:53'
+  },
+  {
+    id: 'yt-default-5',
+    title: 'BTS "00:00 (Zero O"Clock)" Lyrics (Color Coded Lyrics)',
+    artist: 'BTS',
+    file: 'https://www.youtube.com/watch?v=TUVcZfQe-Kw',
+    type: 'youtube',
+    cover: '✨',
+    duration: '4:11'
+  }
+];         // Array of music track objects
 
 // Initialize default system rooms
 function createDefaultRooms() {
@@ -625,8 +671,17 @@ io.on('connection', (socket) => {
     const callMap = roomCalls.get(data.roomId);
     const existingParticipants = Array.from(callMap.keys()).filter(name => name !== user.username);
 
+    const isNewCall = callMap.size === 0;
     callMap.set(user.username, socket.id);
     console.log(`[SERVER] 📹 ${user.username} joined video call in room: ${data.roomId} (total: ${callMap.size})`);
+
+    if (isNewCall) {
+      socket.to(data.roomId).emit('incoming-room-video-call', {
+        from: user.username,
+        roomId: data.roomId,
+        roomName: rooms.get(data.roomId)?.name || 'Group Video Call'
+      });
+    }
 
     callMap.forEach((sId, name) => {
       if (name !== user.username) {
@@ -861,6 +916,33 @@ io.on('connection', (socket) => {
       console.error('[SERVER] Failed to add YouTube track:', error);
       callback?.({ success: false, error: 'Failed to add YouTube track' });
     }
+  });
+
+  socket.on('music-remove-track', (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'User not registered' });
+      return;
+    }
+
+    if (user.currentRoom !== 'music-room') {
+      callback?.({ success: false, error: 'You must be in Music Room to remove tracks' });
+      return;
+    }
+
+    const { trackId } = data || {};
+    const trackIndex = musicPlaylist.findIndex(t => t.id === trackId);
+    if (trackIndex === -1) {
+      callback?.({ success: false, error: 'Track not found' });
+      return;
+    }
+
+    const removed = musicPlaylist[trackIndex];
+    musicPlaylist.splice(trackIndex, 1);
+    console.log(`[SERVER] 🗑️ Track removed by ${user.username}: ${removed.title}`);
+
+    io.emit('music-playlist-updated', { playlist: musicPlaylist });
+    callback?.({ success: true, playlist: musicPlaylist });
   });
 
   socket.on('fetch-youtube-metadata', async (videoUrl, callback) => {
