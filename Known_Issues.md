@@ -7,7 +7,7 @@
 
 ## 🌐 1. ภาพรวมและฟีเจอร์หลักของเว็บ (Web Application Overview)
 
-**ChatVerse** เป็นเว็บแอปพลิเคชันสื่อสารแบบ Real-time ที่รวมระบบแชท วิดีโอคอลแบบกลุ่ม และห้องฟังเพลงร่วมกันไว้ในระบบเดียว พัฒนาด้วย Node.js, Express, Socket.io, Vanilla HTML5/CSS3 และ WebRTC Mesh Architecture
+**ChatVerse** เป็นเว็บแอปพลิเคชันสื่อสารแบบ Real-time ที่รวมระบบแชท วิดีโอคอลแบบกลุ่ม การส่งสื่อ และห้องฟังเพลงร่วมกันไว้ในระบบเดียว พัฒนาด้วย Node.js, Express, Socket.io, Vanilla HTML5/CSS3 และ WebRTC Mesh Architecture
 
 ### ฟีเจอร์หลักของระบบ:
 1. **ระบบยืนยันตัวตนและสถานะผู้ใช้ (Authentication & Online Presence):**
@@ -15,9 +15,11 @@
    - แสดงรายการผู้ใช้งานออนไลน์ (Online Users List) แบบ Real-time
    - บันทึกสถานะสมาชิกในห้องแบบ Persistent (`active / inactive`) เมื่อผู้ใช้เข้า/ออกจากห้อง
 
-2. **ระบบแชทกลุ่มและแชทส่วนตัว (Group Chat & Private Direct Message):**
+2. **ระบบแชทกลุ่ม แชทส่วนตัว และส่งสื่อ (Group Chat, Direct Message & Media Sharing):**
    - ห้องแชทส่วนกลาง (Lobby) และสามารถสร้างห้องแชทใหม่ได้ตามต้องการ
+   - ตัวนับจำนวนข้อความ (Message Count) แสดงผลข้างชื่อห้องแชท
    - ระบบส่งข้อความส่วนตัว (DM 1-on-1) พร้อม Unread Notification Counter Badges
+   - ระบบส่งรูปภาพและวิดีโอในแชท (Media Attachments & Preview)
    - ระบบสถานะเปิดอ่านข้อความ (Read Receipts - ติ๊กอ่านแล้ว) และระบบแจ้งเตือนแบบ Toast
 
 3. **ระบบวิดีโอคอลหลายคนพร้อมกัน (Multi-User WebRTC Group Video Call):**
@@ -37,21 +39,25 @@
 
 ---
 
-## 🛠️ 2. สรุปประวัติการแก้ไขฟีเจอร์ (Resolved Features Log)
+## 🛠️ 2. สรุปประวัติการแก้ไขฟีเจอร์และบั๊ก (Resolved Features & Bug Fixes Log)
 
-| หมวดหมู่ | ฟีเจอร์ที่ดำเนินการ | สถานะ | สิ่งที่เพิ่ม/แก้ไข |
+| หมวดหมู่ | ฟีเจอร์/บั๊กที่ดำเนินการ | สถานะ | สิ่งที่เพิ่ม/แก้ไข |
 | :--- | :--- | :---: | :--- |
 | **แชทส่วนตัว** | Direct Message & Unread Badges | ✅ แก้แล้ว | เพิ่ม Unread badge, Toast แจ้งเตือน และประวัติ DM ย้อนหลังฝั่ง Server |
 | **ห้องเพลง** | Audio Upload & Streaming | ✅ แก้แล้ว | เพิ่มปุ่ม Upload Audio, บันทึกลง Server และ Broadcast Playlist ทั้งระบบ |
 | **สมาชิกห้อง** | Persistent Room Presence | ✅ แก้แล้ว | เก็บรายชื่อสมาชิกห้องแบบ persistent แสดงสถานะ active/inactive |
 | **สถานะวิดีโอคอล** | Mic/Cam Mute Indicators | ✅ แก้แล้ว | เพิ่ม Socket Event ส่งสถานะ Mute/Unmute และ Badge บนวิดีโอของคู่สนทนา |
 | **วิดีโอคอลหลายคน** | Group Call & Floating PIP | ✅ แก้แล้ว | เปลี่ยนเป็น Mesh WebRTC รองรับคอลหลายคนพร้อมกันใน Video Grid + ปุ่มย่อหน้าต่างลอย |
+| **ส่งสื่อในแชท** | Image & Video Sharing | ✅ แก้แล้ว | รองรับการอัปโหลดและส่งรูปภาพ/วิดีโอในห้องแชท พร้อมพรีวิวสื่อ |
+| **ห้องแชท** | Room Message Counter | ✅ แก้แล้ว | แสดงตัวนับจำนวนข้อความที่ส่งในแต่ละห้องแชทแบบ Real-time |
+| **แก้ไขบั๊ก CSS** | Syntax Error (`at-rule or selector expected`) | ✅ แก้แล้ว | ลบเศษโค้ด `right: 4px; }`, วงเล็บปีกกาปิดส่วนเกิน และ Selector ซ้ำซ้อนใน `public/style.css` (L1728-1786) |
+| **โครงสร้างโค้ด** | Code Refactor & Optimization | ✅ เสร็จแล้ว | Refactor โค้ดฝั่ง Server (`server.js`) จัดกลุ่ม Helper & Socket Event Controllers ปรับปรุงความเสถียรและความสะอาดของโค้ด |
 
 ---
 
 ## ⚠️ 3. ปัญหาและข้อจำกัดทางเทคนิคที่พบ (Known Issues & Technical Caveats)
 
-แม้ว่าระบบปัจจุบันจะทำงานได้ครบถ้วน แต่อาจมีข้อจำกัดทางเทคนิคตามสภาพแวดล้อมการใช้งาน ดังนี้:
+แม้อยู่ในสถานะทำงานได้ครบถ้วน แต่างมีข้อจำกัดทางเทคนิคตามสภาพแวดล้อมการใช้งาน ดังนี้:
 
 ### 1. การเชื่อมต่อ WebRTC ข้ามเครือข่ายภายนอก (NAT Traversal & TURN Server)
 * **ข้อจำกัด:** ปัจจุบันระบบใช้ **Google Public STUN Server** (`stun:stun.l.google.com:19302`) สำหรับการจับคู่ IP Address ระหว่างเครื่องผู้ใช้
@@ -72,3 +78,7 @@
 * **ข้อจำกัด:** คลิป YouTube บางวิดีโออาจถูกเจ้าของลิขสิทธิ์ตั้งค่า **"Disable Embedding"** หรือจำกัดประเทศการรับชม
 * **ผลกระทบ:** เมื่อนำ URL มาใส่ใน Music Room อาจเล่นวิดีโอไม่ได้หรือเกิดข้อผิดพลาดจากฝั่ง YouTube Player
 * **แนวทางแก้ไข:** ใช้เพลงจากอัปโหลดไฟล์เสียงตรงเข้า Server หรือเลือก URL วิดีโอ YouTube ที่อนุญาตให้เปิดบนเว็บภายนอกได้
+
+### 5. ประวัติการแก้ไข CSS Syntax Error (`at-rule or selector expected @[public/style.css:L1746]`)
+* **สาเหตุของปัญหา:** เกิดจากเศษโค้ด CSS Property (`right: 4px; }`) อยู่นอก Selector Block และมีวงเล็บปีกกาปิด (`}`) ค้างจากอดีต `@media` query รวมทั้งมีบล็อก `.video-controls` และ `.btn-video` ซ้ำซ้อนที่หลุดมาจากกิ่งการพัฒนาเก่า
+* **การแก้ไขที่ดำเนินการแล้ว:** ทำการ Clean up โค้ดส่วนเกินช่วงบรรทัดที่ 1728–1786 ใน `public/style.css` ออก ส่งผลให้โครงสร้าง CSS ถูกต้องตามมาตรฐาน และไม่มี Syntax Error รบกวนการ Build/Lint อีกต่อไป

@@ -6,37 +6,39 @@ const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 
+// ==================== APPLICATION SETUP ====================
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 1e8
+  maxHttpBufferSize: 1e8 // 100MB max payload size
 });
 
 const PORT = process.env.PORT || 3000;
 const musicUploadDir = path.join(__dirname, 'public', 'music', 'uploads');
 const chatUploadDir = path.join(__dirname, 'public', 'uploads', 'chat');
 
+// Ensure upload directories exist
 fs.mkdirSync(musicUploadDir, { recursive: true });
 fs.mkdirSync(chatUploadDir, { recursive: true });
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ==================== DATA STORE ====================
-const rooms = new Map();       // roomId -> { id, name, type, members: Set, messages: [] }
-const users = new Map();       // socketId -> { id, username, socketId, currentRoom }
-const privateChats = new Map(); // chatKey -> [{ from, to, text, timestamp, read }]
-const onlineUsers = new Map(); // username -> socketId
-const roomCalls = new Map();   // roomId -> Map<username, socketId>
-let musicPlaylist = []; // Start empty - only YouTube tracks supported
+// ==================== IN-MEMORY DATA STORE ====================
+const rooms = new Map();        // roomId -> { id, name, type, owner, hidden, isPrivate, allowedUsers: Set, blockedUsers: Set, members: Set, presence: Map, messages: [], messageCount }
+const users = new Map();        // socketId -> { id, username, socketId, currentRoom }
+const privateChats = new Map(); // chatKey -> [{ id, from, to, text, attachment, timestamp, read }]
+const onlineUsers = new Map();  // username -> socketId
+const roomCalls = new Map();    // roomId -> Map<username, socketId>
+let musicPlaylist = [];         // Array of music track objects
 
-// Create default rooms
+// Initialize default system rooms
 function createDefaultRooms() {
-  const lobby = {
-    id: 'lobby',
-    name: '🏠 Lobby',
-    type: 'general',
+  const createRoomObj = (id, name, type) => ({
+    id,
+    name,
+    type,
     owner: 'system',
     hidden: false,
     isPrivate: false,
@@ -46,41 +48,55 @@ function createDefaultRooms() {
     presence: new Map(),
     messages: [],
     messageCount: 0
-  };
-  const musicRoom = {
-    id: 'music-room',
-    name: '🎵 Music Room',
-    type: 'music',
-    owner: 'system',
-    hidden: false,
-    isPrivate: false,
-    allowedUsers: new Set(),
-    blockedUsers: new Set(),
-    members: new Set(),
-    presence: new Map(),
-    messages: [],
-    messageCount: 0
-  };
-  rooms.set('lobby', lobby);
-  rooms.set('music-room', musicRoom);
+  });
+
+  rooms.set('lobby', createRoomObj('lobby', '🏠 Lobby', 'general'));
+  rooms.set('music-room', createRoomObj('music-room', '🎵 Music Room', 'music'));
 }
 createDefaultRooms();
 
-// Helper: get private chat key
+// ==================== HELPER FUNCTIONS ====================
+
+/** Ensures room data structures are properly initialized */
+function ensureRoomDefaults(room) {
+  if (!room.presence) room.presence = new Map();
+  if (!room.members) room.members = new Set();
+  if (!room.allowedUsers) room.allowedUsers = new Set();
+  if (!room.blockedUsers) room.blockedUsers = new Set();
+}
+
+/** Generates deterministic sorting key for 1-on-1 private chats */
 function getChatKey(user1, user2) {
   return [user1, user2].sort().join('::');
 }
 
-// Helper: get room list filtered for a specific user
+/** Sanitizes file names to prevent path traversal or unsafe characters */
+function sanitizeFileName(name) {
+  return (name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/** Validates whether a user is allowed to access a given room */
+function canUserAccessRoom(room, username) {
+  ensureRoomDefaults(room);
+
+  if (room.blockedUsers.has(username)) {
+    return { allowed: false, reason: 'คุณถูกบล็อกไม่ให้เข้าห้องนี้ (You are blocked from this room)' };
+  }
+
+  if (room.isPrivate && room.owner !== username && !room.allowedUsers.has(username)) {
+    return { allowed: false, reason: 'ห้องนี้เป็นห้องส่วนตัว เฉพาะผู้ได้รับอนุญาตเท่านั้น (Private room - Access denied)' };
+  }
+
+  return { allowed: true };
+}
+
+/** Prepares a user-customized list of accessible rooms */
 function getRoomListForUser(username) {
   const list = [];
   rooms.forEach((room) => {
-    if (!room.presence) room.presence = new Map();
-    if (!room.members) room.members = new Set();
-    if (!room.allowedUsers) room.allowedUsers = new Set();
-    if (!room.blockedUsers) room.blockedUsers = new Set();
+    ensureRoomDefaults(room);
 
-    // Hidden room filter: visible only to owner and allowed users
+    // Filter hidden rooms: visible only to owner and explicitly allowed users
     if (room.hidden && room.owner !== username && !room.allowedUsers.has(username)) {
       return;
     }
@@ -101,6 +117,7 @@ function getRoomListForUser(username) {
   return list;
 }
 
+/** Broadcasts updated room list to all connected users */
 function broadcastRoomList() {
   users.forEach((user, socketId) => {
     const s = io.sockets.sockets.get(socketId);
@@ -110,29 +127,25 @@ function broadcastRoomList() {
   });
 }
 
+/** Returns formatted room members with active status */
 function getRoomMembers(room) {
-  if (!room.presence) room.presence = new Map();
-  if (!room.members) room.members = new Set();
+  ensureRoomDefaults(room);
   return Array.from(room.members).map((username) => ({
     username,
     active: room.presence.get(username) === true
   }));
 }
 
+/** Sets user room presence state (active / inactive) */
 function setRoomPresence(roomId, username, active) {
   const room = rooms.get(roomId);
   if (!room) return;
-  if (!room.presence) room.presence = new Map();
-  if (!room.members) room.members = new Set();
+  ensureRoomDefaults(room);
   room.members.add(username);
   room.presence.set(username, active);
 }
 
-function sanitizeFileName(name) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
-// Helper: get online users list
+/** Helper to list currently registered online users */
 function getOnlineUsersList() {
   const list = [];
   users.forEach((user) => {
@@ -141,22 +154,34 @@ function getOnlineUsersList() {
   return list;
 }
 
-// ==================== SOCKET.IO ====================
+/** Saves base64 encoded file to disk safely */
+async function saveBase64File(targetDir, rawFileName, base64Data) {
+  const safeName = `${Date.now()}-${uuidv4().substring(0, 6)}-${sanitizeFileName(rawFileName)}`;
+  const filePath = path.join(targetDir, safeName);
+  const buffer = Buffer.from(base64Data, 'base64');
+  await fsp.writeFile(filePath, buffer);
+  return { safeName, filePath, bufferLength: buffer.length };
+}
+
+// ==================== SOCKET.IO CONTROLLERS ====================
 io.on('connection', (socket) => {
   console.log(`[SERVER] ✅ New connection: ${socket.id}`);
 
-  // --- User Registration ---
+  /* ----------------- 1. User & Presence Handlers ----------------- */
+
   socket.on('register', (username, callback) => {
     if (onlineUsers.has(username)) {
       callback({ success: false, error: 'Username already taken' });
       return;
     }
+
     const user = {
       id: uuidv4(),
       username,
       socketId: socket.id,
       currentRoom: null
     };
+
     users.set(socket.id, user);
     onlineUsers.set(username, socket.id);
 
@@ -164,7 +189,6 @@ io.on('connection', (socket) => {
 
     callback({ success: true, user: { id: user.id, username: user.username } });
 
-    // Broadcast updated users/rooms
     io.emit('online-users', getOnlineUsersList());
     broadcastRoomList();
   });
@@ -188,7 +212,8 @@ io.on('connection', (socket) => {
     callback?.({ unread });
   });
 
-  // --- Create Room ---
+  /* ----------------- 2. Room Management Handlers ----------------- */
+
   socket.on('create-room', (data, callback) => {
     const user = users.get(socket.id);
     if (!user) {
@@ -225,8 +250,8 @@ io.on('connection', (socket) => {
       success: true,
       room: {
         id: roomId,
-        name: roomName,
-        type: 'general',
+        name: room.name,
+        type: room.type,
         owner: user.username,
         hidden: room.hidden,
         isPrivate: room.isPrivate,
@@ -238,7 +263,6 @@ io.on('connection', (socket) => {
     broadcastRoomList();
   });
 
-  // --- Join Room ---
   socket.on('join-room', (roomId, callback) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -249,43 +273,34 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Access control: blocked check
-    if (room.blockedUsers && room.blockedUsers.has(user.username)) {
-      callback({ success: false, error: 'คุณถูกบล็อกไม่ให้เข้าห้องนี้ (You are blocked from this room)' });
+    const access = canUserAccessRoom(room, user.username);
+    if (!access.allowed) {
+      callback({ success: false, error: access.reason });
       return;
     }
 
-    // Access control: private room check
-    if (room.isPrivate && room.owner !== user.username && (!room.allowedUsers || !room.allowedUsers.has(user.username))) {
-      callback({ success: false, error: 'ห้องนี้เป็นห้องส่วนตัว เฉพาะผู้ได้รับอนุญาตเท่านั้น (Private room - Access denied)' });
-      return;
-    }
-
-    // Leave previous room
+    // Leave previous room if currently inside one
     if (user.currentRoom && user.currentRoom !== roomId) {
       const prevRoom = rooms.get(user.currentRoom);
       if (prevRoom) {
         setRoomPresence(user.currentRoom, user.username, false);
         socket.leave(user.currentRoom);
-        // Notify room members that user left
         socket.to(user.currentRoom).emit('user-left-room', {
           username: user.username,
           roomId: user.currentRoom,
           active: false,
           timestamp: new Date().toISOString()
         });
-        broadcastRoomList();
       }
     }
 
-    // Join new room
+    // Join target room
     setRoomPresence(roomId, user.username, true);
     user.currentRoom = roomId;
     socket.join(roomId);
 
     console.log(`[SERVER] ➡️  ${user.username} joined room: ${room.name}`);
 
-    // Notify room members
     socket.to(roomId).emit('user-joined-room', {
       username: user.username,
       roomId,
@@ -293,7 +308,6 @@ io.on('connection', (socket) => {
       timestamp: new Date().toISOString()
     });
 
-    // Send room data to user
     const recentMessages = room.messages.slice(-50);
     callback({
       success: true,
@@ -316,7 +330,6 @@ io.on('connection', (socket) => {
     broadcastRoomList();
   });
 
-  // --- Leave Room ---
   socket.on('leave-room', (callback) => {
     const user = users.get(socket.id);
     if (!user || !user.currentRoom) return;
@@ -342,7 +355,6 @@ io.on('connection', (socket) => {
     if (callback) callback({ success: true });
   });
 
-  // --- Update Room Settings (Owner Only) ---
   socket.on('update-room-settings', (data, callback) => {
     const user = users.get(socket.id);
     if (!user) {
@@ -375,7 +387,7 @@ io.on('connection', (socket) => {
 
     console.log(`[SERVER] ⚙️ Room settings updated for ${room.name} by ${user.username}`);
 
-    // Kick users who are blocked or no longer allowed
+    // Evict blocked or unallowed active members
     users.forEach((u, sId) => {
       if (u.currentRoom === room.id && u.username !== room.owner) {
         const isBlocked = room.blockedUsers.has(u.username);
@@ -414,7 +426,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // --- Delete Room (Owner Only) ---
   socket.on('delete-room', (roomId, callback) => {
     const user = users.get(socket.id);
     if (!user) {
@@ -440,7 +451,6 @@ io.on('connection', (socket) => {
 
     console.log(`[SERVER] 🗑️ Room deleted by ${user.username}: ${room.name} (${roomId})`);
 
-    // Notify occupants
     io.to(roomId).emit('room-deleted', {
       roomId,
       roomName: room.name,
@@ -458,7 +468,8 @@ io.on('connection', (socket) => {
     callback?.({ success: true });
   });
 
-  // --- Chat File Upload ---
+  /* ----------------- 3. Messaging & File Upload Handlers ----------------- */
+
   socket.on('chat-upload-file', async (data, callback) => {
     const user = users.get(socket.id);
     if (!user) {
@@ -472,21 +483,16 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const safeName = `${Date.now()}-${uuidv4().substring(0, 6)}-${sanitizeFileName(data.fileName)}`;
-      const filePath = path.join(chatUploadDir, safeName);
-      const buffer = Buffer.from(data.base64, 'base64');
-      await fsp.writeFile(filePath, buffer);
-
+      const { safeName, bufferLength } = await saveBase64File(chatUploadDir, data.fileName, data.base64);
       const fileUrl = `/uploads/chat/${safeName}`;
       const mimeType = data.mimeType || 'application/octet-stream';
-      const fileSize = buffer.length;
 
       let mediaType = 'file';
       if (mimeType.startsWith('image/')) mediaType = 'image';
       else if (mimeType.startsWith('video/')) mediaType = 'video';
       else if (mimeType.startsWith('audio/')) mediaType = 'audio';
 
-      console.log(`[SERVER] 📎 Chat file uploaded by ${user.username}: ${safeName} (${mediaType}, ${fileSize} bytes)`);
+      console.log(`[SERVER] 📎 Chat file uploaded by ${user.username}: ${safeName} (${mediaType}, ${bufferLength} bytes)`);
 
       callback?.({
         success: true,
@@ -494,7 +500,7 @@ io.on('connection', (socket) => {
           url: fileUrl,
           fileName: data.fileName,
           mimeType,
-          fileSize,
+          fileSize: bufferLength,
           mediaType
         }
       });
@@ -504,7 +510,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Room Message (Group Chat) ---
   socket.on('room-message', (data) => {
     const user = users.get(socket.id);
     if (!user || !user.currentRoom) return;
@@ -524,20 +529,19 @@ io.on('connection', (socket) => {
     };
 
     room.messages.push(message);
+    room.messageCount = (room.messageCount || 0) + 1;
 
-    // Keep only last 200 messages
+    // Keep last 200 messages in memory
     if (room.messages.length > 200) {
       room.messages = room.messages.slice(-200);
     }
 
-    // Broadcast message to allowed online users (excluding sender)
+    // Broadcast message to eligible online users
     users.forEach((targetUser, targetSocketId) => {
       if (targetSocketId === socket.id) return;
 
-      if (room.isPrivate) {
-        if (room.owner !== targetUser.username && (!room.allowedUsers || !room.allowedUsers.has(targetUser.username))) {
-          return;
-        }
+      if (room.isPrivate && room.owner !== targetUser.username && (!room.allowedUsers || !room.allowedUsers.has(targetUser.username))) {
+        return;
       }
       if (room.blockedUsers && room.blockedUsers.has(targetUser.username)) {
         return;
@@ -545,9 +549,10 @@ io.on('connection', (socket) => {
 
       io.to(targetSocketId).emit('room-message', message);
     });
+
+    broadcastRoomList();
   });
 
-  // --- Private Message (1-on-1) ---
   socket.on('private-message', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -562,7 +567,6 @@ io.on('connection', (socket) => {
       read: false
     };
 
-    // Store message
     const chatKey = getChatKey(user.username, data.to);
     if (!privateChats.has(chatKey)) {
       privateChats.set(chatKey, []);
@@ -575,7 +579,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Read Receipt ---
   socket.on('message-read', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -589,7 +592,6 @@ io.on('connection', (socket) => {
       });
     }
 
-    // Update stored message
     const chatKey = getChatKey(user.username, data.from);
     const chat = privateChats.get(chatKey);
     if (chat) {
@@ -598,7 +600,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Get Private Chat History ---
   socket.on('get-private-chat', (targetUsername, callback) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -608,7 +609,8 @@ io.on('connection', (socket) => {
     callback({ messages: messages.slice(-50) });
   });
 
-  // --- Multi-User Video Call Signaling ---
+  /* ----------------- 4. WebRTC Video Call Handlers ----------------- */
+
   socket.on('join-video-call', (data, callback) => {
     const user = users.get(socket.id);
     if (!user || !data?.roomId) {
@@ -626,7 +628,6 @@ io.on('connection', (socket) => {
     callMap.set(user.username, socket.id);
     console.log(`[SERVER] 📹 ${user.username} joined video call in room: ${data.roomId} (total: ${callMap.size})`);
 
-    // Notify existing participants that a new user joined
     callMap.forEach((sId, name) => {
       if (name !== user.username) {
         io.to(sId).emit('user-joined-video-call', {
@@ -759,7 +760,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Music Room ---
+  /* ----------------- 5. Music Player & Playlist Handlers ----------------- */
+
   socket.on('music-sync-request', (roomId) => {
     socket.to(roomId).emit('music-sync-request', { from: socket.id });
   });
@@ -776,7 +778,6 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (!user || !user.currentRoom) return;
 
-    // Broadcast music control to all in room except sender
     socket.to(user.currentRoom).emit('music-control', {
       action: data.action,
       trackId: data.trackId,
@@ -803,10 +804,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const safeName = `${Date.now()}-${sanitizeFileName(data.fileName)}`;
-      const filePath = path.join(musicUploadDir, safeName);
-      const buffer = Buffer.from(data.base64, 'base64');
-      await fsp.writeFile(filePath, buffer);
+      const { safeName } = await saveBase64File(musicUploadDir, data.fileName, data.base64);
 
       const uploadedTrack = {
         id: Date.now(),
@@ -826,7 +824,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Add YouTube track to playlist (no file storage needed)
   socket.on('music-add-youtube', (data, callback) => {
     const user = users.get(socket.id);
     if (!user) {
@@ -866,7 +863,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Fetch YouTube metadata (title, duration)
   socket.on('fetch-youtube-metadata', async (videoUrl, callback) => {
     try {
       const videoId = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([a-zA-Z0-9_-]{11})/)?.[1];
@@ -875,10 +871,8 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Try to fetch from YouTube oEmbed API
       const oembed = await fetch(`https://www.youtube.com/oembed?url=https://youtube.com/watch?v=${videoId}&format=json`);
       if (!oembed.ok) {
-        // Fallback: return empty metadata
         callback?.({ success: true, title: `YouTube - ${videoId.substring(0, 8)}`, duration: 'Unknown' });
         return;
       }
@@ -891,13 +885,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Disconnect ---
+  /* ----------------- 6. Disconnect Handler ----------------- */
+
   socket.on('disconnect', () => {
     const user = users.get(socket.id);
     if (user) {
       console.log(`[SERVER] ❌ Disconnected: ${user.username} (${socket.id})`);
 
-      // Remove from current room
       if (user.currentRoom) {
         const room = rooms.get(user.currentRoom);
         if (room) {
@@ -911,7 +905,6 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Clean up room video calls
       roomCalls.forEach((callMap, roomId) => {
         if (callMap.has(user.username)) {
           callMap.delete(user.username);
