@@ -15,7 +15,7 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const musicUploadDir = path.join(__dirname, 'public', 'music', 'uploads');
+const musicUploadDir = path.join(__dirname, 'public', 'uploads', 'music');
 const chatUploadDir = path.join(__dirname, 'public', 'uploads', 'chat');
 
 // Ensure upload directories exist
@@ -810,7 +810,7 @@ io.on('connection', (socket) => {
         id: Date.now(),
         title: data.title || path.parse(data.fileName).name,
         artist: data.artist || user.username,
-        file: `/music/uploads/${safeName}`,
+        file: `/uploads/music/${safeName}`,
         duration: data.duration || 'Uploaded',
         cover: data.cover || '🎧'
       };

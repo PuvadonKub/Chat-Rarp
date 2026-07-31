@@ -44,7 +44,7 @@
 | หมวดหมู่ | ฟีเจอร์/บั๊กที่ดำเนินการ | สถานะ | สิ่งที่เพิ่ม/แก้ไข |
 | :--- | :--- | :---: | :--- |
 | **แชทส่วนตัว** | Direct Message & Unread Badges | ✅ แก้แล้ว | เพิ่ม Unread badge, Toast แจ้งเตือน และประวัติ DM ย้อนหลังฝั่ง Server |
-| **ห้องเพลง** | Audio Upload & Streaming | ✅ แก้แล้ว | เพิ่มปุ่ม Upload Audio, บันทึกลง Server และ Broadcast Playlist ทั้งระบบ |
+| **ห้องเพลง** | Audio Upload & Streaming | ✅ แก้แล้ว | เพิ่มปุ่ม Upload Audio, บันทึกลง Server (/uploads/music/) และ Broadcast Playlist ทั้งระบบ |
 | **สมาชิกห้อง** | Persistent Room Presence | ✅ แก้แล้ว | เก็บรายชื่อสมาชิกห้องแบบ persistent แสดงสถานะ active/inactive |
 | **สถานะวิดีโอคอล** | Mic/Cam Mute Indicators | ✅ แก้แล้ว | เพิ่ม Socket Event ส่งสถานะ Mute/Unmute และ Badge บนวิดีโอของคู่สนทนา |
 | **วิดีโอคอลหลายคน** | Group Call & Floating PIP | ✅ แก้แล้ว | เปลี่ยนเป็น Mesh WebRTC รองรับคอลหลายคนพร้อมกันใน Video Grid + ปุ่มย่อหน้าต่างลอย |
