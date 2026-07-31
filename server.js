@@ -15,8 +15,10 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const musicUploadDir = path.join(__dirname, 'public', 'music', 'uploads');
+const chatUploadDir = path.join(__dirname, 'public', 'uploads', 'chat');
 
 fs.mkdirSync(musicUploadDir, { recursive: true });
+fs.mkdirSync(chatUploadDir, { recursive: true });
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -35,6 +37,11 @@ function createDefaultRooms() {
     id: 'lobby',
     name: '🏠 Lobby',
     type: 'general',
+    owner: 'system',
+    hidden: false,
+    isPrivate: false,
+    allowedUsers: new Set(),
+    blockedUsers: new Set(),
     members: new Set(),
     presence: new Map(),
     messages: []
@@ -43,6 +50,11 @@ function createDefaultRooms() {
     id: 'music-room',
     name: '🎵 Music Room',
     type: 'music',
+    owner: 'system',
+    hidden: false,
+    isPrivate: false,
+    allowedUsers: new Set(),
+    blockedUsers: new Set(),
     members: new Set(),
     presence: new Map(),
     messages: []
@@ -57,22 +69,42 @@ function getChatKey(user1, user2) {
   return [user1, user2].sort().join('::');
 }
 
-// Helper: get room list for clients
-function getRoomList() {
+// Helper: get room list filtered for a specific user
+function getRoomListForUser(username) {
   const list = [];
   rooms.forEach((room) => {
     if (!room.presence) room.presence = new Map();
     if (!room.members) room.members = new Set();
+    if (!room.allowedUsers) room.allowedUsers = new Set();
+    if (!room.blockedUsers) room.blockedUsers = new Set();
+
+    // Hidden room filter: visible only to owner and allowed users
+    if (room.hidden && room.owner !== username && !room.allowedUsers.has(username)) {
+      return;
+    }
+
     const activeMemberCount = Array.from(room.presence.values()).filter(Boolean).length;
     list.push({
       id: room.id,
       name: room.name,
       type: room.type,
+      owner: room.owner || 'system',
+      hidden: Boolean(room.hidden),
+      isPrivate: Boolean(room.isPrivate),
       memberCount: room.members.size,
       activeMemberCount
     });
   });
   return list;
+}
+
+function broadcastRoomList() {
+  users.forEach((user, socketId) => {
+    const s = io.sockets.sockets.get(socketId);
+    if (s) {
+      s.emit('room-list', getRoomListForUser(user.username));
+    }
+  });
 }
 
 function getRoomMembers(room) {
@@ -131,7 +163,7 @@ io.on('connection', (socket) => {
 
     // Broadcast updated users/rooms
     io.emit('online-users', getOnlineUsersList());
-    io.emit('room-list', getRoomList());
+    broadcastRoomList();
   });
 
   socket.on('get-dm-unread-summary', (callback) => {
@@ -154,22 +186,51 @@ io.on('connection', (socket) => {
   });
 
   // --- Create Room ---
-  socket.on('create-room', (roomName, callback) => {
+  socket.on('create-room', (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'Unregistered user' });
+      return;
+    }
+
+    const roomName = typeof data === 'string' ? data : data?.name;
+    if (!roomName || !roomName.trim()) {
+      callback?.({ success: false, error: 'Room name is required' });
+      return;
+    }
+
     const roomId = 'room-' + uuidv4().substring(0, 8);
     const room = {
       id: roomId,
-      name: roomName,
+      name: roomName.trim(),
       type: 'general',
+      owner: user.username,
+      hidden: Boolean(data?.hidden),
+      isPrivate: Boolean(data?.isPrivate),
+      allowedUsers: new Set([user.username]),
+      blockedUsers: new Set(),
       members: new Set(),
       presence: new Map(),
       messages: []
     };
     rooms.set(roomId, room);
 
-    console.log(`[SERVER] 🏠 Room created: ${roomName} (${roomId})`);
+    console.log(`[SERVER] 🏠 Room created by ${user.username}: ${roomName} (${roomId})`);
 
-    callback({ success: true, room: { id: roomId, name: roomName, type: 'general' } });
-    io.emit('room-list', getRoomList());
+    callback({
+      success: true,
+      room: {
+        id: roomId,
+        name: roomName,
+        type: 'general',
+        owner: user.username,
+        hidden: room.hidden,
+        isPrivate: room.isPrivate,
+        allowedUsers: Array.from(room.allowedUsers),
+        blockedUsers: Array.from(room.blockedUsers)
+      }
+    });
+    broadcastRoomList();
   });
 
   // --- Join Room ---
@@ -180,6 +241,18 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room) {
       callback({ success: false, error: 'Room not found' });
+      return;
+    }
+
+    // Access control: blocked check
+    if (room.blockedUsers && room.blockedUsers.has(user.username)) {
+      callback({ success: false, error: 'คุณถูกบล็อกไม่ให้เข้าห้องนี้ (You are blocked from this room)' });
+      return;
+    }
+
+    // Access control: private room check
+    if (room.isPrivate && room.owner !== user.username && (!room.allowedUsers || !room.allowedUsers.has(user.username))) {
+      callback({ success: false, error: 'ห้องนี้เป็นห้องส่วนตัว เฉพาะผู้ได้รับอนุญาตเท่านั้น (Private room - Access denied)' });
       return;
     }
 
@@ -196,7 +269,7 @@ io.on('connection', (socket) => {
           active: false,
           timestamp: new Date().toISOString()
         });
-        io.emit('room-list', getRoomList());
+        broadcastRoomList();
       }
     }
 
@@ -223,13 +296,18 @@ io.on('connection', (socket) => {
         id: room.id,
         name: room.name,
         type: room.type,
+        owner: room.owner || 'system',
+        hidden: Boolean(room.hidden),
+        isPrivate: Boolean(room.isPrivate),
+        allowedUsers: Array.from(room.allowedUsers || []),
+        blockedUsers: Array.from(room.blockedUsers || []),
         members: getRoomMembers(room),
         messages: recentMessages
       },
       playlist: room.type === 'music' ? musicPlaylist : undefined
     });
 
-    io.emit('room-list', getRoomList());
+    broadcastRoomList();
   });
 
   // --- Leave Room ---
@@ -251,11 +329,173 @@ io.on('connection', (socket) => {
         timestamp: new Date().toISOString()
       });
 
-      io.emit('room-list', getRoomList());
+      broadcastRoomList();
     }
 
     user.currentRoom = null;
     if (callback) callback({ success: true });
+  });
+
+  // --- Update Room Settings (Owner Only) ---
+  socket.on('update-room-settings', (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'Unregistered user' });
+      return;
+    }
+
+    const room = rooms.get(data?.roomId);
+    if (!room) {
+      callback?.({ success: false, error: 'Room not found' });
+      return;
+    }
+
+    if (room.owner !== user.username) {
+      callback?.({ success: false, error: 'Only the room owner can modify room settings' });
+      return;
+    }
+
+    if (typeof data.hidden === 'boolean') room.hidden = data.hidden;
+    if (typeof data.isPrivate === 'boolean') room.isPrivate = data.isPrivate;
+
+    if (Array.isArray(data.allowedUsers)) {
+      room.allowedUsers = new Set(data.allowedUsers);
+      room.allowedUsers.add(room.owner);
+    }
+
+    if (Array.isArray(data.blockedUsers)) {
+      room.blockedUsers = new Set(data.blockedUsers.filter(u => u !== room.owner));
+    }
+
+    console.log(`[SERVER] ⚙️ Room settings updated for ${room.name} by ${user.username}`);
+
+    // Kick users who are blocked or no longer allowed
+    users.forEach((u, sId) => {
+      if (u.currentRoom === room.id && u.username !== room.owner) {
+        const isBlocked = room.blockedUsers.has(u.username);
+        const isNotAllowed = room.isPrivate && !room.allowedUsers.has(u.username);
+
+        if (isBlocked || isNotAllowed) {
+          const targetSocket = io.sockets.sockets.get(sId);
+          if (targetSocket) {
+            setRoomPresence(room.id, u.username, false);
+            u.currentRoom = null;
+            targetSocket.leave(room.id);
+            targetSocket.emit('kicked-from-room', {
+              roomId: room.id,
+              reason: isBlocked ? 'คุณถูกบล็อกโดยเจ้าของห้อง (Blocked by owner)' : 'สิทธิ์การเข้าห้องถูกยกเลิก (Access revoked)'
+            });
+            socket.to(room.id).emit('user-left-room', {
+              username: u.username,
+              roomId: room.id,
+              active: false,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+      }
+    });
+
+    broadcastRoomList();
+    callback?.({
+      success: true,
+      roomSettings: {
+        hidden: room.hidden,
+        isPrivate: room.isPrivate,
+        allowedUsers: Array.from(room.allowedUsers),
+        blockedUsers: Array.from(room.blockedUsers)
+      }
+    });
+  });
+
+  // --- Delete Room (Owner Only) ---
+  socket.on('delete-room', (roomId, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'Unregistered user' });
+      return;
+    }
+
+    const room = rooms.get(roomId);
+    if (!room) {
+      callback?.({ success: false, error: 'Room not found' });
+      return;
+    }
+
+    if (room.owner !== user.username) {
+      callback?.({ success: false, error: 'Only the room owner can delete this room' });
+      return;
+    }
+
+    if (room.id === 'lobby' || room.id === 'music-room') {
+      callback?.({ success: false, error: 'System default rooms cannot be deleted' });
+      return;
+    }
+
+    console.log(`[SERVER] 🗑️ Room deleted by ${user.username}: ${room.name} (${roomId})`);
+
+    // Notify occupants
+    io.to(roomId).emit('room-deleted', {
+      roomId,
+      roomName: room.name,
+      deletedBy: user.username
+    });
+
+    users.forEach((u) => {
+      if (u.currentRoom === roomId) {
+        u.currentRoom = null;
+      }
+    });
+
+    rooms.delete(roomId);
+    broadcastRoomList();
+    callback?.({ success: true });
+  });
+
+  // --- Chat File Upload ---
+  socket.on('chat-upload-file', async (data, callback) => {
+    const user = users.get(socket.id);
+    if (!user) {
+      callback?.({ success: false, error: 'User not registered' });
+      return;
+    }
+
+    try {
+      if (!data?.fileName || !data?.base64) {
+        callback?.({ success: false, error: 'Invalid file payload' });
+        return;
+      }
+
+      const safeName = `${Date.now()}-${uuidv4().substring(0, 6)}-${sanitizeFileName(data.fileName)}`;
+      const filePath = path.join(chatUploadDir, safeName);
+      const buffer = Buffer.from(data.base64, 'base64');
+      await fsp.writeFile(filePath, buffer);
+
+      const fileUrl = `/uploads/chat/${safeName}`;
+      const mimeType = data.mimeType || 'application/octet-stream';
+      const fileSize = buffer.length;
+
+      let mediaType = 'file';
+      if (mimeType.startsWith('image/')) mediaType = 'image';
+      else if (mimeType.startsWith('video/')) mediaType = 'video';
+      else if (mimeType.startsWith('audio/')) mediaType = 'audio';
+
+      console.log(`[SERVER] 📎 Chat file uploaded by ${user.username}: ${safeName} (${mediaType}, ${fileSize} bytes)`);
+
+      callback?.({
+        success: true,
+        attachment: {
+          url: fileUrl,
+          fileName: data.fileName,
+          mimeType,
+          fileSize,
+          mediaType
+        }
+      });
+    } catch (error) {
+      console.error('[SERVER] Failed to upload chat file:', error);
+      callback?.({ success: false, error: 'Failed to save file on server' });
+    }
   });
 
   // --- Room Message (Group Chat) ---
@@ -270,7 +510,8 @@ io.on('connection', (socket) => {
     const message = {
       id: uuidv4(),
       from: user.username,
-      text: data.text,
+      text: data.text || '',
+      attachment: data.attachment || null,
       timestamp: new Date().toISOString(),
       type: 'message'
     };
@@ -295,7 +536,8 @@ io.on('connection', (socket) => {
       id: uuidv4(),
       from: user.username,
       to: data.to,
-      text: data.text,
+      text: data.text || '',
+      attachment: data.attachment || null,
       timestamp: new Date().toISOString(),
       read: false
     };
@@ -667,7 +909,7 @@ io.on('connection', (socket) => {
       users.delete(socket.id);
 
       io.emit('online-users', getOnlineUsersList());
-      io.emit('room-list', getRoomList());
+      broadcastRoomList();
     } else {
       console.log(`[SERVER] ❌ Disconnected: ${socket.id} (unregistered)`);
     }

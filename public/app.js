@@ -20,6 +20,8 @@ let isMusicHost = false;
 let roomListCache = [];
 let onlineUsersCache = [];
 let unreadDmCounts = new Map();
+let pendingChatFiles = [];
+let pendingMusicFiles = [];
 
 // ==================== DOM ELEMENTS ====================
 const $ = (id) => document.getElementById(id);
@@ -49,6 +51,34 @@ const chatMessages = $('chat-messages');
 const chatInput = $('chat-input');
 const sendBtn = $('send-btn');
 const leaveRoomBtn = $('leave-room-btn');
+
+const attachBtn = $('attach-btn');
+const chatFileInput = $('chat-file-input');
+const chatAttachmentPreview = $('chat-attachment-preview');
+
+const dmAttachBtn = $('dm-attach-btn');
+const dmFileInput = $('dm-file-input');
+const dmAttachmentPreview = $('dm-attachment-preview');
+
+const musicAttachBtn = $('music-attach-btn');
+const musicFileInput = $('music-file-input');
+const musicAttachmentPreview = $('music-attachment-preview');
+
+const imageLightboxModal = $('image-lightbox-modal');
+const lightboxImg = $('lightbox-img');
+const lightboxFilename = $('lightbox-filename');
+const lightboxDownloadLink = $('lightbox-download-link');
+const closeLightboxBtn = $('close-lightbox-btn');
+
+const roomSettingsBtn = $('room-settings-btn');
+const roomSettingsModal = $('room-settings-modal');
+const closeRoomSettingsBtn = $('close-room-settings');
+const settingHiddenToggle = $('setting-hidden-toggle');
+const settingPrivateToggle = $('setting-private-toggle');
+const allowedMembersList = $('allowed-members-list');
+const blockedMembersList = $('blocked-members-list');
+const saveRoomSettingsBtn = $('save-room-settings-btn');
+const deleteRoomBtn = $('delete-room-btn');
 
 const videoCallBtn = $('video-call-btn');
 const membersSidebar = $('members-sidebar');
@@ -334,6 +364,11 @@ function joinRoom(roomId) {
         currentChat = { type: 'room', id: roomId, name: res.room.name, data: res.room };
         currentRoom = currentChat;
 
+        const isOwner = currentUser && res.room.owner === currentUser.username;
+        if (roomSettingsBtn) {
+            roomSettingsBtn.style.display = (isOwner && res.room.id !== 'lobby' && res.room.id !== 'music-room') ? 'flex' : 'none';
+        }
+
         if (res.room.type === 'music') {
             showPanel(musicPanel);
             musicRoomMembers.textContent = formatMemberSummary(res.room.members);
@@ -357,6 +392,8 @@ function joinRoom(roomId) {
 function openDM(username) {
     currentChat = { type: 'dm', id: username, name: username };
     currentDMUser = username;
+    if (roomSettingsBtn) roomSettingsBtn.style.display = 'none';
+
     showPanel(chatPanel);
     roomNameEl.textContent = username;
     roomMembersCount.textContent = 'Active now';
@@ -373,6 +410,153 @@ function openDM(username) {
     renderUnifiedList();
     chatInput.focus();
 }
+
+// ==================== ROOM SETTINGS MODAL ====================
+let currentRoomAllowedUsers = new Set();
+let currentRoomBlockedUsers = new Set();
+
+function openRoomSettingsModal() {
+    if (!currentChat || currentChat.type !== 'room' || !currentChat.data) return;
+    const roomData = currentChat.data;
+
+    settingHiddenToggle.checked = Boolean(roomData.hidden);
+    settingPrivateToggle.checked = Boolean(roomData.isPrivate);
+
+    currentRoomAllowedUsers = new Set(roomData.allowedUsers || []);
+    currentRoomBlockedUsers = new Set(roomData.blockedUsers || []);
+
+    renderRoomSettingsUsers();
+    roomSettingsModal.classList.add('active');
+}
+
+function renderRoomSettingsUsers() {
+    if (!allowedMembersList || !blockedMembersList) return;
+    allowedMembersList.innerHTML = '';
+    blockedMembersList.innerHTML = '';
+
+    const candidateUsers = new Set();
+    onlineUsersCache.forEach(u => candidateUsers.add(u.username));
+    normalizeMembers(currentChat.data.members).forEach(m => candidateUsers.add(m.username));
+    currentRoomAllowedUsers.forEach(u => candidateUsers.add(u));
+    currentRoomBlockedUsers.forEach(u => candidateUsers.add(u));
+
+    candidateUsers.forEach(username => {
+        if (currentUser && username === currentUser.username) return;
+
+        // Render in Allowed List
+        const isAllowed = currentRoomAllowedUsers.has(username);
+        const allowDiv = document.createElement('div');
+        allowDiv.className = 'member-manage-item';
+        allowDiv.innerHTML = `
+            <div class="member-manage-user">
+                <div class="avatar-sm ${getAvatarColor(username)}" style="width:24px;height:24px;font-size:11px;">${getInitials(username)}</div>
+                <span>${escapeHtml(username)}</span>
+            </div>
+            <button class="btn-toggle-action ${isAllowed ? 'active' : ''}">
+                ${isAllowed ? '<i class="fas fa-check"></i> Allowed' : 'Allow'}
+            </button>
+        `;
+        const allowBtn = allowDiv.querySelector('button');
+        allowBtn.addEventListener('click', () => {
+            if (currentRoomAllowedUsers.has(username)) {
+                currentRoomAllowedUsers.delete(username);
+            } else {
+                currentRoomAllowedUsers.add(username);
+                currentRoomBlockedUsers.delete(username);
+            }
+            renderRoomSettingsUsers();
+        });
+        allowedMembersList.appendChild(allowDiv);
+
+        // Render in Blocked List
+        const isBlocked = currentRoomBlockedUsers.has(username);
+        const blockDiv = document.createElement('div');
+        blockDiv.className = 'member-manage-item';
+        blockDiv.innerHTML = `
+            <div class="member-manage-user">
+                <div class="avatar-sm ${getAvatarColor(username)}" style="width:24px;height:24px;font-size:11px;">${getInitials(username)}</div>
+                <span>${escapeHtml(username)}</span>
+            </div>
+            <button class="btn-toggle-action danger ${isBlocked ? 'active' : ''}">
+                ${isBlocked ? '<i class="fas fa-ban"></i> Blocked' : 'Block'}
+            </button>
+        `;
+        const blockBtn = blockDiv.querySelector('button');
+        blockBtn.addEventListener('click', () => {
+            if (currentRoomBlockedUsers.has(username)) {
+                currentRoomBlockedUsers.delete(username);
+            } else {
+                currentRoomBlockedUsers.add(username);
+                currentRoomAllowedUsers.delete(username);
+            }
+            renderRoomSettingsUsers();
+        });
+        blockedMembersList.appendChild(blockDiv);
+    });
+}
+
+if (roomSettingsBtn) roomSettingsBtn.addEventListener('click', openRoomSettingsModal);
+if (closeRoomSettingsBtn) closeRoomSettingsBtn.addEventListener('click', () => roomSettingsModal.classList.remove('active'));
+
+if (saveRoomSettingsBtn) {
+    saveRoomSettingsBtn.addEventListener('click', () => {
+        if (!currentChat || currentChat.type !== 'room') return;
+
+        const hidden = settingHiddenToggle.checked;
+        const isPrivate = settingPrivateToggle.checked;
+        const allowedUsers = Array.from(currentRoomAllowedUsers);
+        const blockedUsers = Array.from(currentRoomBlockedUsers);
+
+        socket.emit('update-room-settings', {
+            roomId: currentChat.id,
+            hidden,
+            isPrivate,
+            allowedUsers,
+            blockedUsers
+        }, (res) => {
+            if (res && res.success) {
+                currentChat.data.hidden = hidden;
+                currentChat.data.isPrivate = isPrivate;
+                currentChat.data.allowedUsers = allowedUsers;
+                currentChat.data.blockedUsers = blockedUsers;
+                roomSettingsModal.classList.remove('active');
+                showToast('Room settings saved!', 'success');
+            } else {
+                showToast(res?.error || 'Failed to save room settings', 'error');
+            }
+        });
+    });
+}
+
+if (deleteRoomBtn) {
+    deleteRoomBtn.addEventListener('click', () => {
+        if (!currentChat || currentChat.type !== 'room') return;
+        if (!confirm(`Are you sure you want to delete room "${currentChat.name}"? This action cannot be undone.`)) return;
+
+        socket.emit('delete-room', currentChat.id, (res) => {
+            if (res && res.success) {
+                roomSettingsModal.classList.remove('active');
+                showToast(`Room "${currentChat.name}" was deleted`, 'info');
+                leaveRoom();
+            } else {
+                showToast(res?.error || 'Failed to delete room', 'error');
+            }
+        });
+    });
+}
+
+// Socket listeners for room moderation
+socket.on('kicked-from-room', (data) => {
+    showToast(data.reason || 'You were removed from the room', 'warning');
+    closeChat();
+});
+
+socket.on('room-deleted', (data) => {
+    if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
+        showToast(`Room "${data.roomName}" was deleted by owner (${data.deletedBy})`, 'warning');
+        closeChat();
+    }
+});
 
 leaveRoomBtn.addEventListener('click', leaveRoom);
 leaveMusicBtn.addEventListener('click', leaveRoom);
@@ -402,6 +586,150 @@ function closeChat() {
 
 // ==================== CHAT MESSAGES ====================
 
+// ==================== CHAT MESSAGES & ATTACHMENTS ====================
+
+function formatBytes(bytes, decimals = 1) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+function getFileIcon(mimeType = '', fileName = '') {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    if (mimeType.startsWith('image/')) return 'fa-file-image';
+    if (mimeType.startsWith('video/')) return 'fa-file-video';
+    if (mimeType.startsWith('audio/')) return 'fa-file-audio';
+    if (ext === 'pdf') return 'fa-file-pdf';
+    if (['doc', 'docx'].includes(ext)) return 'fa-file-word';
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return 'fa-file-excel';
+    if (['ppt', 'pptx'].includes(ext)) return 'fa-file-powerpoint';
+    if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return 'fa-file-archive';
+    if (['js', 'html', 'css', 'json', 'py', 'java', 'cpp', 'c', 'ts', 'php'].includes(ext)) return 'fa-file-code';
+    if (['txt', 'md', 'log'].includes(ext)) return 'fa-file-alt';
+    return 'fa-file';
+}
+
+function renderPendingPreview(target = 'chat') {
+    const files = target === 'music' ? pendingMusicFiles : pendingChatFiles;
+    const container = target === 'music' ? musicAttachmentPreview : (chatAttachmentPreview || dmAttachmentPreview);
+    if (!container) return;
+
+    container.innerHTML = '';
+    if (files.length === 0) return;
+
+    files.forEach((file, index) => {
+        const card = document.createElement('div');
+        card.className = 'attachment-preview-card';
+
+        if (file.type.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            card.appendChild(img);
+        } else {
+            const icon = document.createElement('i');
+            icon.className = `fas ${getFileIcon(file.type, file.name)} attachment-preview-icon`;
+            card.appendChild(icon);
+        }
+
+        const info = document.createElement('div');
+        info.className = 'attachment-preview-info';
+        info.innerHTML = `
+            <span class="attachment-preview-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+            <span class="attachment-preview-size">${formatBytes(file.size)}</span>
+        `;
+        card.appendChild(info);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'attachment-preview-remove';
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+        removeBtn.title = 'Remove';
+        removeBtn.addEventListener('click', () => {
+            files.splice(index, 1);
+            renderPendingPreview(target);
+        });
+        card.appendChild(removeBtn);
+
+        container.appendChild(card);
+    });
+}
+
+function addFilesToPending(fileList, target = 'chat') {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    const targetArray = target === 'music' ? pendingMusicFiles : pendingChatFiles;
+    files.forEach(f => targetArray.push(f));
+    renderPendingPreview(target);
+}
+
+function renderAttachmentHTML(attachment) {
+    if (!attachment || !attachment.url) return '';
+    const { url, fileName, mimeType, fileSize, mediaType } = attachment;
+    const safeName = escapeHtml(fileName || 'file');
+    const safeUrl = escapeHtml(url);
+    const sizeStr = formatBytes(fileSize);
+
+    if (mediaType === 'image') {
+        return `
+            <div class="msg-attachment msg-attachment-image" onclick="openLightbox('${safeUrl}', '${safeName}')">
+                <img src="${safeUrl}" alt="${safeName}" loading="lazy">
+            </div>
+        `;
+    } else if (mediaType === 'video') {
+        return `
+            <div class="msg-attachment msg-attachment-video">
+                <video src="${safeUrl}" controls preload="metadata"></video>
+            </div>
+        `;
+    } else if (mediaType === 'audio') {
+        return `
+            <div class="msg-attachment msg-attachment-audio">
+                <audio src="${safeUrl}" controls preload="none"></audio>
+            </div>
+        `;
+    } else {
+        const iconClass = getFileIcon(mimeType, fileName);
+        return `
+            <div class="msg-attachment">
+                <a href="${safeUrl}" download="${safeName}" target="_blank" class="msg-attachment-file">
+                    <i class="fas ${iconClass} msg-file-icon"></i>
+                    <div class="msg-file-info">
+                        <span class="msg-file-name" title="${safeName}">${safeName}</span>
+                        <span class="msg-file-size">${sizeStr}</span>
+                    </div>
+                    <span class="msg-file-download-btn"><i class="fas fa-download"></i> Download</span>
+                </a>
+            </div>
+        `;
+    }
+}
+
+function openLightbox(imgUrl, fileName) {
+    if (!imageLightboxModal || !lightboxImg) return;
+    lightboxImg.src = imgUrl;
+    if (lightboxFilename) lightboxFilename.textContent = fileName || 'Image';
+    if (lightboxDownloadLink) {
+        lightboxDownloadLink.href = imgUrl;
+        lightboxDownloadLink.download = fileName || 'download';
+    }
+    imageLightboxModal.classList.add('active');
+}
+
+function closeLightbox() {
+    if (imageLightboxModal) imageLightboxModal.classList.remove('active');
+}
+
+if (closeLightboxBtn) {
+    closeLightboxBtn.addEventListener('click', closeLightbox);
+}
+if (imageLightboxModal) {
+    imageLightboxModal.addEventListener('click', (e) => {
+        if (e.target === imageLightboxModal) closeLightbox();
+    });
+}
+
 function renderChatMessages(messages) {
     chatMessages.innerHTML = '';
     messages.forEach(msg => appendMessageUI(msg));
@@ -421,9 +749,15 @@ function appendMessageUI(msg) {
     const row = document.createElement('div');
     row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
 
+    const textHtml = msg.text ? `<div>${escapeHtml(msg.text)}</div>` : '';
+    const attachmentHtml = renderAttachmentHTML(msg.attachment);
+
     row.innerHTML = `
         ${!isSent ? `<div class="avatar-sm ${getAvatarColor(msg.from)}" style="width:28px;height:28px;font-size:12px;margin-right:8px;align-self:flex-end;">${getInitials(msg.from)}</div>` : ''}
-        <div class="ms-msg-bubble" title="${formatTime(msg.timestamp)}">${escapeHtml(msg.text)}</div>
+        <div class="ms-msg-bubble" title="${formatTime(msg.timestamp)}">
+            ${textHtml}
+            ${attachmentHtml}
+        </div>
     `;
     chatMessages.appendChild(row);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -433,92 +767,172 @@ sendBtn.addEventListener('click', sendMessage);
 chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
 function sendMessage() {
-    const text = chatInput.value.trim();
-    if (!text || !currentChat) return;
-
-    const msg = {
-        id: Date.now().toString(),
-        from: currentUser.username,
-        text,
-        timestamp: new Date().toISOString(),
-        type: 'message'
-    };
-
-    appendMessageUI(msg);
-    if (currentChat.type === 'room') {
-        socket.emit('room-message', { text });
-    } else {
-        socket.emit('private-message', { to: currentChat.id, text });
-    }
-    chatInput.value = '';
+    const text = chatInput ? chatInput.value : '';
+    uploadAndSend(text, pendingChatFiles, 'chat');
 }
 
-socket.on('room-message', (msg) => {
-    if (currentChat && currentChat.type === 'room') {
-        if (currentChat.data && currentChat.data.type === 'music') appendMusicChatMessage(msg);
-        else appendMessageUI(msg);
-    }
-});
+async function uploadAndSend(text, files, target = 'chat') {
+    if (!currentChat) return;
 
-socket.on('private-message', (msg) => {
-    if (currentChat && currentChat.type === 'dm' && currentChat.id === msg.from) {
-        appendMessageUI(msg);
-        socket.emit('message-read', { messageId: msg.id, from: msg.from });
-    } else {
-        showToast(`💬 New DM from ${msg.from}`, 'info');
-        bumpUnreadCount(msg.from);
-    }
-});
+    const hasText = Boolean(text.trim());
+    const hasFiles = files && files.length > 0;
+    if (!hasText && !hasFiles) return;
 
-socket.on('user-joined-room', (data) => {
-    if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
-        const members = normalizeMembers(currentChat.data.members);
-        const existing = members.find(member => member.username === data.username);
-        if (existing) existing.active = true;
-        else members.push({ username: data.username, active: true });
-        currentChat.data.members = members;
-        updateMembersList(currentChat.data.members);
-        roomMembersCount.textContent = formatMemberSummary(currentChat.data.members);
-        showToast(`${data.username} joined`, 'info');
-    }
-});
-socket.on('user-left-room', (data) => {
-    if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
-        const members = normalizeMembers(currentChat.data.members);
-        const existing = members.find(member => member.username === data.username);
-        if (existing) existing.active = false;
-        else members.push({ username: data.username, active: false });
-        currentChat.data.members = members;
-        updateMembersList(currentChat.data.members);
-        roomMembersCount.textContent = formatMemberSummary(currentChat.data.members);
-        showToast(data.active === false ? `${data.username} is inactive` : `${data.username} left`, 'warning');
-    }
-});
+    const isMusic = target === 'music';
+    const activeSendBtn = isMusic ? musicSendBtn : sendBtn;
+    if (activeSendBtn) activeSendBtn.disabled = true;
 
-roomMembersBtn.addEventListener('click', () => membersSidebar.classList.toggle('active'));
-closeMembersBtn.addEventListener('click', () => membersSidebar.classList.remove('active'));
+    try {
+        if (hasFiles) {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const base64 = await readFileAsBase64(file);
 
-function updateMembersList(members) {
-    if (!membersList) return;
-    membersList.innerHTML = '';
-    normalizeMembers(members).forEach(m => {
-        const div = document.createElement('div');
-        div.className = `member-item ${m.active ? 'active' : 'inactive'}`;
-        div.innerHTML = `<div class="avatar-sm ${getAvatarColor(m.username)}">${getInitials(m.username)}</div> <span>${escapeHtml(m.username)}</span><span class="member-state ${m.active ? 'active' : 'inactive'}">${m.active ? 'active' : 'inactive'}</span>`;
-        membersList.appendChild(div);
+                const res = await new Promise((resolve) => {
+                    socket.emit('chat-upload-file', {
+                        fileName: file.name,
+                        mimeType: file.type,
+                        base64
+                    }, (response) => resolve(response));
+                });
+
+                if (res && res.success) {
+                    const messageText = (i === 0 && hasText) ? text.trim() : '';
+                    const msg = {
+                        id: Date.now().toString() + '-' + i,
+                        from: currentUser.username,
+                        text: messageText,
+                        attachment: res.attachment,
+                        timestamp: new Date().toISOString(),
+                        type: 'message'
+                    };
+
+                    if (isMusic) {
+                        appendMusicChatMessage(msg);
+                        socket.emit('room-message', { text: messageText, attachment: res.attachment });
+                    } else if (currentChat.type === 'room') {
+                        appendMessageUI(msg);
+                        socket.emit('room-message', { text: messageText, attachment: res.attachment });
+                    } else {
+                        appendMessageUI(msg);
+                        socket.emit('private-message', { to: currentChat.id, text: messageText, attachment: res.attachment });
+                    }
+                } else {
+                    showToast(res?.error || `Failed to upload ${file.name}`, 'error');
+                }
+            }
+        } else if (hasText) {
+            const messageText = text.trim();
+            const msg = {
+                id: Date.now().toString(),
+                from: currentUser.username,
+                text: messageText,
+                attachment: null,
+                timestamp: new Date().toISOString(),
+                type: 'message'
+            };
+
+            if (isMusic) {
+                appendMusicChatMessage(msg);
+                socket.emit('room-message', { text: messageText });
+            } else if (currentChat.type === 'room') {
+                appendMessageUI(msg);
+                socket.emit('room-message', { text: messageText });
+            } else {
+                appendMessageUI(msg);
+                socket.emit('private-message', { to: currentChat.id, text: messageText });
+            }
+        }
+    } catch (err) {
+        console.error('Error sending message/files:', err);
+        showToast('Failed to send message', 'error');
+    } finally {
+        if (isMusic) {
+            pendingMusicFiles = [];
+            renderPendingPreview('music');
+            if (musicChatInput) musicChatInput.value = '';
+        } else {
+            pendingChatFiles = [];
+            renderPendingPreview('chat');
+            if (chatInput) chatInput.value = '';
+        }
+        if (activeSendBtn) activeSendBtn.disabled = false;
+    }
+}
+
+// Attachment button & file input listeners
+if (attachBtn && chatFileInput) {
+    attachBtn.addEventListener('click', () => chatFileInput.click());
+    chatFileInput.addEventListener('change', () => {
+        addFilesToPending(chatFileInput.files, 'chat');
+        chatFileInput.value = '';
+    });
+}
+if (dmAttachBtn && dmFileInput) {
+    dmAttachBtn.addEventListener('click', () => dmFileInput.click());
+    dmFileInput.addEventListener('change', () => {
+        addFilesToPending(dmFileInput.files, 'chat');
+        dmFileInput.value = '';
+    });
+}
+if (musicAttachBtn && musicFileInput) {
+    musicAttachBtn.addEventListener('click', () => musicFileInput.click());
+    musicFileInput.addEventListener('change', () => {
+        addFilesToPending(musicFileInput.files, 'music');
+        musicFileInput.value = '';
     });
 }
 
+// Clipboard Paste & Drag and Drop
+window.addEventListener('paste', (e) => {
+    if (!currentUser || !currentChat) return;
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+        e.preventDefault();
+        const isMusic = currentChat.type === 'room' && currentChat.data?.type === 'music';
+        addFilesToPending(files, isMusic ? 'music' : 'chat');
+        showToast(`Pasted ${files.length} file(s) from clipboard`, 'info');
+    }
+});
+
+function setupDragAndDrop(element, target) {
+    if (!element) return;
+    ['dragenter', 'dragover'].forEach(eventName => {
+        element.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            element.classList.add('drag-over');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        element.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            element.classList.remove('drag-over');
+        }, false);
+    });
+
+    element.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files && files.length > 0) {
+            addFilesToPending(files, target);
+            showToast(`Attached ${files.length} file(s)`, 'info');
+        }
+    });
+}
+
+setupDragAndDrop(chatMessages, 'chat');
+setupDragAndDrop(musicChatMessages, 'music');
+setupDragAndDrop(dmMessages, 'chat');
+
 // Music room chat logic
-musicSendBtn.addEventListener('click', sendMusicChat);
-musicChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMusicChat(); });
+if (musicSendBtn) musicSendBtn.addEventListener('click', sendMusicChat);
+if (musicChatInput) musicChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMusicChat(); });
 function sendMusicChat() {
-    const text = musicChatInput.value.trim();
-    if (!text || !currentChat) return;
-    const msg = { id: Date.now().toString(), from: currentUser.username, text, timestamp: new Date().toISOString(), type: 'message' };
-    appendMusicChatMessage(msg);
-    socket.emit('room-message', { text });
-    musicChatInput.value = '';
+    const text = musicChatInput ? musicChatInput.value : '';
+    uploadAndSend(text, pendingMusicFiles, 'music');
 }
 function renderMusicChat(messages) { musicChatMessages.innerHTML = ''; messages.forEach(msg => appendMusicChatMessage(msg)); }
 function appendMusicChatMessage(msg) {
@@ -531,7 +945,9 @@ function appendMusicChatMessage(msg) {
         const isSent = msg.from === currentUser?.username;
         const row = document.createElement('div');
         row.className = `ms-msg-row ${isSent ? 'sent' : 'received'}`;
-        row.innerHTML = `<div class="ms-msg-bubble">${escapeHtml(msg.text)}</div>`;
+        const textHtml = msg.text ? `<div>${escapeHtml(msg.text)}</div>` : '';
+        const attachmentHtml = renderAttachmentHTML(msg.attachment);
+        row.innerHTML = `<div class="ms-msg-bubble">${textHtml}${attachmentHtml}</div>`;
         musicChatMessages.appendChild(row);
     }
     musicChatMessages.scrollTop = musicChatMessages.scrollHeight;

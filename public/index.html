@@ -125,6 +125,9 @@
               <span id="room-members-count" class="badge"></span>
             </div>
             <div class="chat-header-actions">
+              <button id="room-settings-btn" class="btn-icon" title="Room Settings / ตั้งค่าห้อง" style="display: none;">
+                <i class="fas fa-cog"></i>
+              </button>
               <button id="video-call-btn" class="btn-icon" title="Start Video Call">
                 <i class="fas fa-video"></i>
               </button>
@@ -150,7 +153,12 @@
 
           <div class="chat-input-area">
             <div class="typing-indicator" id="typing-indicator"></div>
+            <div id="chat-attachment-preview" class="attachment-preview-bar"></div>
             <div class="chat-input-wrapper">
+              <button id="attach-btn" class="btn-attach" title="Attach image, video or file">
+                <i class="fas fa-paperclip"></i>
+              </button>
+              <input type="file" id="chat-file-input" hidden multiple>
               <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
               <button id="send-btn" class="btn-send">
                 <i class="fas fa-paper-plane"></i>
@@ -243,7 +251,12 @@
             <div class="music-chat glass-card">
               <h3><i class="fas fa-comments"></i> Room Chat</h3>
               <div id="music-chat-messages" class="chat-messages"></div>
+              <div id="music-attachment-preview" class="attachment-preview-bar"></div>
               <div class="chat-input-wrapper">
+                <button id="music-attach-btn" class="btn-attach" title="Attach file">
+                  <i class="fas fa-paperclip"></i>
+                </button>
+                <input type="file" id="music-file-input" hidden multiple>
                 <input type="text" id="music-chat-input" placeholder="Type a message..." autocomplete="off">
                 <button id="music-send-btn" class="btn-send">
                   <i class="fas fa-paper-plane"></i>
@@ -272,7 +285,12 @@
           </div>
         </div>
         <div id="dm-messages" class="chat-messages"></div>
+        <div id="dm-attachment-preview" class="attachment-preview-bar"></div>
         <div class="chat-input-wrapper">
+          <button id="dm-attach-btn" class="btn-attach" title="Attach file">
+            <i class="fas fa-paperclip"></i>
+          </button>
+          <input type="file" id="dm-file-input" hidden multiple>
           <input type="text" id="dm-input" placeholder="Type a private message..." autocomplete="off">
           <button id="dm-send-btn" class="btn-send">
             <i class="fas fa-paper-plane"></i>
@@ -338,6 +356,79 @@
       <div class="modal-actions">
         <button id="confirm-create-room" class="btn-primary">Create</button>
         <button id="cancel-create-room" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== IMAGE LIGHTBOX MODAL ==================== -->
+  <div id="image-lightbox-modal" class="modal-overlay lightbox-modal">
+    <div class="lightbox-container glass-card">
+      <button id="close-lightbox-btn" class="lightbox-close-btn" title="Close"><i class="fas fa-times"></i></button>
+      <div class="lightbox-body">
+        <img id="lightbox-img" src="" alt="Image preview">
+      </div>
+      <div class="lightbox-footer">
+        <span id="lightbox-filename"></span>
+        <a id="lightbox-download-link" href="" download target="_blank" class="btn-primary btn-sm">
+          <i class="fas fa-download"></i> <span>Download</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ROOM SETTINGS MODAL ==================== -->
+  <div id="room-settings-modal" class="modal-overlay">
+    <div class="modal glass-card room-settings-card">
+      <div class="modal-header">
+        <h3><i class="fas fa-cog"></i> ตั้งค่าห้อง (Room Settings)</h3>
+        <button id="close-room-settings" class="btn-icon"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="room-settings-body">
+        <div class="settings-section">
+          <h4><i class="fas fa-sliders-h"></i> การมองเห็นและการเข้าถึง (Visibility & Access)</h4>
+          <div class="setting-toggle-item">
+            <div class="setting-info">
+              <span class="setting-title">ซ่อนห้องนี้ (Hidden Room)</span>
+              <span class="setting-desc">ซ่อนห้องจากรายการทั่วไป (เฉพาะคุณและสมาชิกที่ได้รับอนุญาตเท่านั้นที่เห็น)</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-hidden-toggle">
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="setting-toggle-item">
+            <div class="setting-info">
+              <span class="setting-title">ห้องส่วนตัว (Private Room)</span>
+              <span class="setting-desc">ต้องได้รับอนุญาตจากเจ้าของห้องก่อนจึงจะเข้าได้</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-private-toggle">
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4><i class="fas fa-user-check"></i> จัดการสิทธิ์การเข้าใช้งาน (Allowed Members)</h4>
+          <div id="allowed-members-list" class="members-manage-list"></div>
+        </div>
+
+        <div class="settings-section">
+          <h4><i class="fas fa-user-slash"></i> รายชื่อผู้ถูกบล็อก (Blocked Users)</h4>
+          <div id="blocked-members-list" class="members-manage-list"></div>
+        </div>
+
+        <div class="settings-section danger-zone">
+          <h4><i class="fas fa-exclamation-triangle"></i> พื้นที่อันตราย (Danger Zone)</h4>
+          <p>การลบห้องจะทำให้สมาชิกทุกคนหลุดออกจากห้องอย่างถาวร</p>
+          <button id="delete-room-btn" class="btn-danger-block">
+            <i class="fas fa-trash-alt"></i> ลบห้องแชทนี้ (Delete Room)
+          </button>
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button id="save-room-settings-btn" class="btn-primary">บันทึกการตั้งค่า (Save Settings)</button>
       </div>
     </div>
   </div>
