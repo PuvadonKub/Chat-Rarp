@@ -238,11 +238,35 @@ function bumpUnreadCount(username) {
     setUnreadCount(username, getUnreadCount(username) + 1);
 }
 
+let unreadRoomCounts = new Map();
+
+function getRoomUnreadCount(roomId) {
+    return unreadRoomCounts.get(roomId) || 0;
+}
+
+function setRoomUnreadCount(roomId, count) {
+    if (count > 0) unreadRoomCounts.set(roomId, count);
+    else unreadRoomCounts.delete(roomId);
+    renderRoomList(roomListCache);
+}
+
+function bumpRoomUnreadCount(roomId) {
+    setRoomUnreadCount(roomId, getRoomUnreadCount(roomId) + 1);
+}
+
+function clearRoomUnreadCount(roomId) {
+    if (unreadRoomCounts.has(roomId)) {
+        unreadRoomCounts.delete(roomId);
+        renderRoomList(roomListCache);
+    }
+}
+
 function renderRoomList(rooms) {
     roomList.innerHTML = '';
     rooms.forEach(room => {
         const isMusic = room.type === 'music';
         const isActive = currentChat && currentChat.type === 'room' && currentChat.id === room.id;
+        const unreadCount = getRoomUnreadCount(room.id);
         const div = document.createElement('div');
         div.className = `room-item ${isActive ? 'active' : ''}`;
         div.innerHTML = `
@@ -253,6 +277,7 @@ function renderRoomList(rooms) {
         <div class="room-title">${escapeHtml(room.name)}</div>
         <div class="room-meta">${room.activeMemberCount || 0} active / ${room.memberCount || 0} total</div>
       </div>
+      ${unreadCount > 0 ? `<span class="unread-pill">${unreadCount}</span>` : ''}
     `;
         div.addEventListener('click', () => joinRoom(room.id));
         roomList.appendChild(div);
@@ -363,6 +388,8 @@ function joinRoom(roomId) {
 
         currentChat = { type: 'room', id: roomId, name: res.room.name, data: res.room };
         currentRoom = currentChat;
+
+        clearRoomUnreadCount(roomId);
 
         const isOwner = currentUser && res.room.owner === currentUser.username;
         if (roomSettingsBtn) {
@@ -555,6 +582,36 @@ socket.on('room-deleted', (data) => {
     if (currentChat && currentChat.type === 'room' && currentChat.id === data.roomId) {
         showToast(`Room "${data.roomName}" was deleted by owner (${data.deletedBy})`, 'warning');
         closeChat();
+    }
+});
+
+socket.on('room-message', (msg) => {
+    const targetRoomId = msg.roomId || currentRoom?.id;
+    const isCurrentActiveRoom = currentChat && currentChat.type === 'room' && currentChat.id === targetRoomId;
+
+    if (isCurrentActiveRoom) {
+        if (msg.from !== currentUser?.username) {
+            if (currentChat.data?.type === 'music') {
+                appendMusicChatMessage(msg);
+            } else {
+                appendMessageUI(msg);
+            }
+        }
+    } else if (targetRoomId) {
+        bumpRoomUnreadCount(targetRoomId);
+        showToast(`ข้อความใหม่ใน ${escapeHtml(msg.roomName || 'ห้องแชท')} จาก ${escapeHtml(msg.from)}`, 'info');
+    }
+});
+
+socket.on('private-message', (msg) => {
+    const isCurrentActiveDM = currentChat && currentChat.type === 'dm' && currentChat.id === msg.from;
+
+    if (isCurrentActiveDM) {
+        appendMessageUI(msg);
+        socket.emit('message-read', { messageId: msg.id, from: msg.from });
+    } else {
+        bumpUnreadCount(msg.from);
+        showToast(`ข้อความส่วนตัวใหม่จาก ${escapeHtml(msg.from)}`, 'info');
     }
 });
 

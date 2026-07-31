@@ -44,7 +44,8 @@ function createDefaultRooms() {
     blockedUsers: new Set(),
     members: new Set(),
     presence: new Map(),
-    messages: []
+    messages: [],
+    messageCount: 0
   };
   const musicRoom = {
     id: 'music-room',
@@ -57,7 +58,8 @@ function createDefaultRooms() {
     blockedUsers: new Set(),
     members: new Set(),
     presence: new Map(),
-    messages: []
+    messages: [],
+    messageCount: 0
   };
   rooms.set('lobby', lobby);
   rooms.set('music-room', musicRoom);
@@ -92,7 +94,8 @@ function getRoomListForUser(username) {
       hidden: Boolean(room.hidden),
       isPrivate: Boolean(room.isPrivate),
       memberCount: room.members.size,
-      activeMemberCount
+      activeMemberCount,
+      messageCount: room.messageCount || 0
     });
   });
   return list;
@@ -211,7 +214,8 @@ io.on('connection', (socket) => {
       blockedUsers: new Set(),
       members: new Set(),
       presence: new Map(),
-      messages: []
+      messages: [],
+      messageCount: 0
     };
     rooms.set(roomId, room);
 
@@ -227,7 +231,8 @@ io.on('connection', (socket) => {
         hidden: room.hidden,
         isPrivate: room.isPrivate,
         allowedUsers: Array.from(room.allowedUsers),
-        blockedUsers: Array.from(room.blockedUsers)
+        blockedUsers: Array.from(room.blockedUsers),
+        messageCount: 0
       }
     });
     broadcastRoomList();
@@ -302,7 +307,8 @@ io.on('connection', (socket) => {
         allowedUsers: Array.from(room.allowedUsers || []),
         blockedUsers: Array.from(room.blockedUsers || []),
         members: getRoomMembers(room),
-        messages: recentMessages
+        messages: recentMessages,
+        messageCount: room.messageCount || 0
       },
       playlist: room.type === 'music' ? musicPlaylist : undefined
     });
@@ -499,7 +505,6 @@ io.on('connection', (socket) => {
   });
 
   // --- Room Message (Group Chat) ---
-  // Server does NOT echo back to sender (requirement #7)
   socket.on('room-message', (data) => {
     const user = users.get(socket.id);
     if (!user || !user.currentRoom) return;
@@ -509,6 +514,8 @@ io.on('connection', (socket) => {
 
     const message = {
       id: uuidv4(),
+      roomId: room.id,
+      roomName: room.name,
       from: user.username,
       text: data.text || '',
       attachment: data.attachment || null,
@@ -523,8 +530,21 @@ io.on('connection', (socket) => {
       room.messages = room.messages.slice(-200);
     }
 
-    // Broadcast to room EXCEPT sender (requirement #7)
-    socket.to(user.currentRoom).emit('room-message', message);
+    // Broadcast message to allowed online users (excluding sender)
+    users.forEach((targetUser, targetSocketId) => {
+      if (targetSocketId === socket.id) return;
+
+      if (room.isPrivate) {
+        if (room.owner !== targetUser.username && (!room.allowedUsers || !room.allowedUsers.has(targetUser.username))) {
+          return;
+        }
+      }
+      if (room.blockedUsers && room.blockedUsers.has(targetUser.username)) {
+        return;
+      }
+
+      io.to(targetSocketId).emit('room-message', message);
+    });
   });
 
   // --- Private Message (1-on-1) ---
